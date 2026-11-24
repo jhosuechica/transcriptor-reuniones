@@ -379,6 +379,7 @@ class Visor(ctk.CTkFrame):
         if self.transcripcion is None or not self._escuchar:
             return
         self.parar()
+        self.app.parar_prueba()     # ocupa el mismo hilo de audio
         sesion = self.sesion = Sesion(self.carpeta, desde, hasta)
         self.posicion = desde
 

@@ -24,13 +24,15 @@ if sys.stderr is None:
 
 import gc
 import logging
+import math
 import multiprocessing
 import queue
 import threading
+import time
 import tkinter as tk
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -46,7 +48,10 @@ import windows
 from componentes import (
     AMARILLO, GRIS, ICONO, NOMBRE_APP, ROJO, ROJO_OSCURO, VERDE, Dialogo, poner_icono,
 )
-from recorder import SILENCIO_DBFS, Grabadora, listar_dispositivos
+from recorder import (
+    ESPACIO_AVISO, ESPACIO_PARADA, SILENCIO_DBFS, Grabadora, PruebaNiveles, espacio_libre,
+    listar_dispositivos, tiempo_disponible, valorar_niveles,
+)
 from visor import DialogoCorregir, Visor
 
 log = logging.getLogger(__name__)
@@ -60,6 +65,7 @@ LIMPIEZA_MS = 5000          # cada cuánto se recoge la memoria
 NIVEL_MINIMO = -60.0        # dBFS en el extremo izquierdo del medidor
 CAIDA_POR_PASO = 2.0        # dB que baja el medidor en cada paso, para poder leerlo
 ESPERA_SIN_SENAL = 10.0     # s en silencio antes de avisar
+REVISAR_ESPACIO_S = 10.0    # cada cuánto se mira el disco mientras se graba
 PREDETERMINADO = "Predeterminado de Windows"
 AUTOMATICO = "Automático"
 
@@ -67,11 +73,53 @@ PARADO, INICIANDO, GRABANDO, DETENIENDO = "parado", "iniciando", "grabando", "de
 DISPOSITIVOS_CALCULO = {"Automático": "auto", "Solo GPU": "gpu", "Solo CPU": "cpu"}
 
 
+@dataclass
+class Trabajo:
+    """Una transcripción pedida, con la configuración de ese momento."""
+
+    carpeta: Path
+    cfg: config.Config
+    personas: int | None
+    repetir: bool
+
+
+def _restante(segundos: float) -> str:
+    if segundos < 60:
+        return "menos de 1 min"
+    return f"unos {math.ceil(segundos / 60 - 0.1)} min"
+
+
+class DialogoTitulo(Dialogo):
+    def __init__(self, app: "Aplicacion", titulo: str, al_aceptar: Callable[[str], None]):
+        super().__init__(app, "Cambiar el título", 420, 150)
+        self._al_aceptar = al_aceptar
+        self._inicial = titulo
+        self.campo = ctk.CTkEntry(self)
+        self.campo.insert(0, titulo)
+        self.campo.pack(padx=20, pady=(24, 12), fill="x")
+        botones = ctk.CTkFrame(self, fg_color="transparent")
+        botones.pack(padx=20, fill="x")
+        ctk.CTkButton(botones, text="Guardar", command=self.aceptar).pack(side="right")
+        ctk.CTkButton(botones, text="Cancelar", fg_color=GRIS, command=self.cerrar).pack(
+            side="right", padx=8)
+        self.bind("<Return>", lambda _e: self.aceptar())
+
+    def foco_inicial(self) -> None:
+        self.campo.focus_set()
+        self.campo.select_range(0, "end")
+
+    def aceptar(self) -> None:
+        titulo = self.campo.get().strip()
+        self.cerrar()
+        if titulo and titulo != self._inicial:
+            self._al_aceptar(titulo)
+
+
 class DialogoInicio(Dialogo):
     """Pide el título y recuerda el consentimiento antes de grabar."""
 
-    def __init__(self, app: "Aplicacion", al_aceptar: Callable[[str], None]):
-        super().__init__(app, "Nueva grabación", 440, 270)
+    def __init__(self, app: "Aplicacion", al_aceptar: Callable[[str], None], aviso: str = ""):
+        super().__init__(app, "Nueva grabación", 440, 310 if aviso else 270)
         self._al_aceptar = al_aceptar
         # Con el atajo puede haber otra aplicación delante, incluso a pantalla completa.
         self.attributes("-topmost", True)
@@ -80,6 +128,9 @@ class DialogoInicio(Dialogo):
             padx=20, pady=(18, 4), anchor="w")
         ctk.CTkLabel(self, text=CONSENTIMIENTO, wraplength=400, justify="left").pack(
             padx=20, anchor="w")
+        if aviso:
+            ctk.CTkLabel(self, text=aviso, text_color=ROJO, wraplength=400, justify="left").pack(
+                padx=20, pady=(8, 0), anchor="w")
         ctk.CTkLabel(self, text="Título de la reunión").pack(padx=20, pady=(14, 2), anchor="w")
         self.titulo = ctk.CTkEntry(self, placeholder_text="Reunión")
         self.titulo.pack(padx=20, fill="x")
@@ -297,6 +348,11 @@ class Aplicacion(ctk.CTk):
         self.estado = PARADO
         self.carpeta_activa: Path | None = None
         self.procesando: Path | None = None
+        self.cola: list[Trabajo] = []
+        self.moviendo: Path | None = None       # se está renombrando o borrando
+        self.prueba: PruebaNiveles | None = None
+        self._etapa = ""
+        self._referencia: tuple[float, float] | None = None
         self.cancelar = threading.Event()
         self.reuniones: dict[str, flujo.Reunion] = {}
         self.atajo: windows.Atajo | None = None
@@ -349,7 +405,10 @@ class Aplicacion(ctk.CTk):
         self.reloj.grid(row=0, column=2, rowspan=2, padx=14)
         self.boton_ajustes = ctk.CTkButton(
             arriba, text="Ajustes", width=90, fg_color=GRIS, command=self.abrir_ajustes)
-        self.boton_ajustes.grid(row=0, column=3, rowspan=2, padx=(0, 14))
+        self.boton_ajustes.grid(row=0, column=3, padx=(0, 14), pady=(12, 2))
+        self.boton_probar = ctk.CTkButton(
+            arriba, text="Probar", width=90, fg_color=GRIS, command=self.alternar_prueba)
+        self.boton_probar.grid(row=1, column=3, padx=(0, 14), pady=(2, 12))
         self.aviso = ctk.CTkLabel(arriba, text="", text_color=ROJO, wraplength=980, justify="left")
         self.aviso.grid(row=2, column=0, columnspan=4, sticky="w", padx=14)
         self.aviso.grid_remove()
@@ -375,6 +434,17 @@ class Aplicacion(ctk.CTk):
         barra.grid(row=1, column=1, sticky="ns", pady=(0, 10), padx=(0, 4))
         self.lista.configure(yscrollcommand=barra.set)
         self.lista.bind("<<TreeviewSelect>>", lambda _e: self._mostrar_seleccion())
+        self.lista.bind("<F2>", lambda _e: self.cambiar_titulo())
+        self.lista.bind("<Delete>", lambda _e: self.borrar())
+        pie = ctk.CTkFrame(izquierda, fg_color="transparent")
+        pie.grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 10))
+        self.boton_titulo = ctk.CTkButton(
+            pie, text="Cambiar título", width=110, fg_color=GRIS, command=self.cambiar_titulo)
+        self.boton_borrar = ctk.CTkButton(
+            pie, text="Borrar", width=80, fg_color=GRIS, hover_color=ROJO_OSCURO,
+            command=self.borrar)
+        self.boton_titulo.pack(side="left")
+        self.boton_borrar.pack(side="left", padx=8)
         self._estilo_lista()
 
         # Detalle
@@ -526,7 +596,11 @@ class Aplicacion(ctk.CTk):
             if self.dialogo_inicio is not None and self.dialogo_inicio.winfo_exists():
                 self.dialogo_inicio.lift()      # no confirma: el aviso debe leerse
                 return
-            self.dialogo_inicio = DialogoInicio(self, self.iniciar)
+            libre = espacio_libre(Path(self.cfg.carpeta_reuniones))
+            aviso = ""
+            if libre is not None and libre < ESPACIO_AVISO:
+                aviso = f"Queda poco espacio: cabe una grabación de {tiempo_disponible(libre)}."
+            self.dialogo_inicio = DialogoInicio(self, self.iniciar, aviso)
         elif self.estado == GRABANDO:
             self.detener()
 
@@ -536,6 +610,7 @@ class Aplicacion(ctk.CTk):
         # La grabación espera en el mismo hilo a que deje de sonar; además, lo que
         # sonara quedaría grabado en la pista del sistema.
         self.visor.parar()
+        self.parar_prueba()
         self._poner_estado(INICIANDO)
         self._avisados.clear()
         self.grabadora.cfg = self.cfg
@@ -558,9 +633,10 @@ class Aplicacion(ctk.CTk):
 
     def _no_iniciada(self, e: BaseException) -> None:
         self._poner_estado(PARADO)
+        self._siguiente()
         self.mostrar_error(e)
 
-    def detener(self, al_terminar: Callable[[], None] | None = None) -> None:
+    def detener(self, al_terminar: Callable[[], None] | None = None, motivo: str = "") -> None:
         if self.estado != GRABANDO:
             return
         # Se cambia antes de cerrar el audio, para dejar de consultar sus niveles.
@@ -581,14 +657,17 @@ class Aplicacion(ctk.CTk):
                 return
             self.refrescar(carpeta.name)
             if error is not None:
+                self._siguiente()
                 self.mostrar_error(error)
                 return
             self.linea.configure(text=f"Grabación guardada en {carpeta}")
             # Se lanza antes de mostrar avisos, que esperan al usuario.
             if self.cfg.transcribir_al_terminar:
                 self.procesar(carpeta)
-            if sesion["avisos"]:
-                messagebox.showwarning(NOMBRE_APP, "\n\n".join(sesion["avisos"]), parent=self)
+            self._siguiente()
+            avisos = ([motivo] if motivo else []) + sesion["avisos"]
+            if avisos:
+                messagebox.showwarning(NOMBRE_APP, "\n\n".join(avisos), parent=self)
 
         self.en_hilo(self.audio, tarea, lambda s: terminar(s, None), lambda e: terminar(None, e))
 
@@ -608,8 +687,24 @@ class Aplicacion(ctk.CTk):
             self.medidor_sis.poner(SILENCIO_DBFS, activo=False)
         self._actualizar_botones()
 
+    def _revisar_espacio(self) -> None:
+        libre = espacio_libre(Path(self.cfg.carpeta_reuniones))
+        if libre is None:
+            return
+        if libre < ESPACIO_PARADA:
+            self._avisar("Se detuvo la grabación porque el disco está casi lleno.")
+            log.error("Disco casi lleno: se detiene la grabación")
+            self.detener(
+                motivo="La grabación se detuvo y se guardó porque el disco está casi lleno.")
+        elif libre < ESPACIO_AVISO / 2:
+            self._avisar("Queda poco espacio en el disco; la grabación se detendrá antes de "
+                         "que se llene.")
+
     def _actualizar_grabacion(self) -> None:
         if self.estado != GRABANDO:
+            if self.prueba is not None:
+                self.medidor_mic.poner(self.prueba.mic.pico_dbfs)
+                self.medidor_sis.poner(self.prueba.sistema.pico_dbfs)
             return
         g = self.grabadora
         t = g.transcurrido
@@ -628,19 +723,75 @@ class Aplicacion(ctk.CTk):
                 self.indicador.lift()
             for p in g.problemas():
                 self._avisar(p)
+        if self._pasos % int(REVISAR_ESPACIO_S * 1000 / INTERVALO_MS) == 0:
+            self._revisar_espacio()
 
     def _avisar(self, texto: str) -> None:
         """Muestra un aviso sin bloquear la grabación."""
         if texto in self._avisados:
             return
         self._avisados.add(texto)
-        self.bell()
+        # Sin sonido: quedaría en la grabación.
+        self._llamar_atencion()
         self.aviso.configure(text="\n".join(sorted(self._avisados)))
         self.aviso.grid(pady=(0, 10))
 
     def _quitar_aviso(self) -> None:
         self._avisados.clear()
         self.aviso.grid_remove()
+
+    def _en_segundo_plano(self) -> bool:
+        """Indica si se está usando otro programa."""
+        try:
+            return self.focus_displayof() is None
+        except KeyError:        # Tk no encuentra el menú que tiene el foco
+            return False
+
+    def _llamar_atencion(self) -> None:
+        if self._en_segundo_plano():
+            windows.llamar_atencion(int(self.wm_frame(), 16))
+
+    # ----------------------------------------------------------------------
+    # Prueba de niveles
+    # ----------------------------------------------------------------------
+
+    def alternar_prueba(self) -> None:
+        if self.prueba is not None:
+            self.parar_prueba()
+        elif self.estado == PARADO:
+            self.visor.parar()
+            prueba = self.prueba = PruebaNiveles(self.cfg)
+            self.boton_probar.configure(text="Terminar")
+            self.linea.configure(
+                text="Probando 15 segundos: habla y reproduce algo. No se guarda el audio.")
+
+            def terminar(_r) -> None:
+                if self._fin_prueba(prueba):
+                    textos = valorar_niveles(
+                        prueba.mic.pico_max_dbfs, prueba.sistema.pico_max_dbfs)
+                    messagebox.showinfo(
+                        NOMBRE_APP, "\n\n".join(textos + prueba.avisos), parent=self)
+
+            def fallar(e: BaseException) -> None:
+                self._fin_prueba(prueba)
+                self.mostrar_error(e)
+
+            self.en_hilo(self.audio, prueba.ejecutar, terminar, fallar)
+
+    def parar_prueba(self) -> None:
+        if self.prueba is not None:
+            self.prueba.parar()
+
+    def _fin_prueba(self, prueba: PruebaNiveles) -> bool:
+        """Devuelve si procede mostrar el resultado."""
+        self.prueba = None
+        self.boton_probar.configure(text="Probar")
+        self._texto_atajo()
+        if self.estado in (PARADO, DETENIENDO):
+            self.medidor_mic.poner(SILENCIO_DBFS, activo=False)
+            self.medidor_sis.poner(SILENCIO_DBFS, activo=False)
+        # Si se paró para grabar o para salir, el resultado estorba.
+        return self.estado == PARADO and not self._cerrando
 
     # ----------------------------------------------------------------------
     # Lista y detalle
@@ -653,7 +804,7 @@ class Aplicacion(ctk.CTk):
             self.mostrar_error(e)
             return
         # Con un diálogo abierto sobre una reunión no se cambia a otra.
-        if any(isinstance(w, (DialogoNombres, DialogoCorregir)) for w in self.winfo_children()):
+        if any(isinstance(w, (DialogoNombres, DialogoCorregir, DialogoTitulo)) for w in self.winfo_children()):
             seleccionar = None
         previa = seleccionar or next(iter(self.lista.selection()), None)
         self.reuniones = {r.carpeta.name: r for r in reuniones}
@@ -664,7 +815,7 @@ class Aplicacion(ctk.CTk):
                 f"{r.inicio:%d/%m/%Y %H:%M}" if r.inicio else "",
                 r.titulo, "" if activa else merger.hms(r.duracion),
                 "Grabando" if activa else
-                "Procesando" if r.carpeta == self.procesando else r.estado,
+                self._estado_de(r),
             ))
         if previa in self.reuniones:
             self.lista.selection_set(previa)
@@ -672,6 +823,15 @@ class Aplicacion(ctk.CTk):
         elif self.reuniones:
             self.lista.selection_set(next(iter(self.reuniones)))
         self._mostrar_seleccion()
+
+    def _estado_de(self, r: flujo.Reunion) -> str:
+        if r.carpeta == self.procesando:
+            return "Procesando"
+        puesto = self._puesto(r.carpeta)
+        return r.estado if puesto is None else f"En cola ({puesto + 1})"
+
+    def _puesto(self, carpeta: Path) -> int | None:
+        return next((n for n, t in enumerate(self.cola) if t.carpeta == carpeta), None)
 
     def seleccion(self) -> flujo.Reunion | None:
         return self.reuniones.get(next(iter(self.lista.selection()), ""))
@@ -707,23 +867,70 @@ class Aplicacion(ctk.CTk):
             boton.configure(state="normal" if activo else "disabled")
 
         r = self.seleccion()
-        ocupada = r is None or r.carpeta in (self.carpeta_activa, self.procesando)
+        ocupada = r is None or r.carpeta in (
+            self.carpeta_activa, self.procesando, self.moviendo)
+        en_cola = r is not None and self._puesto(r.carpeta) is not None
         transcrita = not ocupada and r.estado == flujo.TRANSCRITA
-        # Empezar a transcribir mientras se graba podría provocar cortes de audio.
-        poner(self.boton_procesar,
-              not ocupada and self.procesando is None and self.estado == PARADO)
+        poner(self.boton_procesar, not ocupada)
+        poner(self.boton_titulo, not ocupada and not en_cola)
+        poner(self.boton_borrar, not ocupada and not en_cola)
+        poner(self.boton_probar, self.estado == PARADO)
         poner(self.boton_nombres, transcrita)
         poner(self.boton_exportar, transcrita)
         poner(self.boton_carpeta, r is not None)
         self.visor.activar(escuchar=self.estado == PARADO, editar=transcrita)
         poner(self.boton_ajustes, self.estado == PARADO)
         poner(self.boton_cancelar, self.procesando is not None and not self.cancelar.is_set())
-        self.boton_procesar.configure(text="Repetir" if transcrita else "Transcribir")
+        self.boton_procesar.configure(
+            text="Quitar de la cola" if en_cola else "Repetir" if transcrita else "Transcribir")
 
     def abrir_carpeta(self) -> None:
         r = self.seleccion()
         if r is not None:
             os.startfile(r.carpeta)     # abre el Explorador
+
+    def cambiar_titulo(self) -> None:
+        r = self.seleccion()
+        if r is not None and self.boton_titulo.cget("state") == "normal":
+            DialogoTitulo(self, r.titulo, lambda t: self._mover(
+                r.carpeta, lambda: flujo.renombrar_reunion(r.carpeta, t), "Título cambiado."))
+
+    def borrar(self) -> None:
+        r = self.seleccion()
+        if r is None or self.boton_borrar.cget("state") != "normal":
+            return
+        if messagebox.askokcancel(
+            NOMBRE_APP, f"¿Mover a la papelera «{r.titulo}»?\n\nSe borran el audio, la "
+            "transcripción y los archivos exportados. Podrás recuperarlos desde la papelera "
+            "de Windows.", icon="warning", parent=self):
+            self._mover(r.carpeta, lambda: windows.a_papelera(r.carpeta),
+                        "Reunión movida a la papelera.")
+
+    def _mover(self, carpeta: Path, tarea: Callable[[], Path | None], texto: str) -> None:
+        """Cambia o borra una carpeta cuando nadie usa ya sus archivos."""
+        if self.moviendo is not None or self._cerrando:
+            return
+        self.visor.parar()
+        self.visor.exportar_pendiente()
+        self.moviendo = carpeta
+        self._actualizar_botones()
+
+        def fin(nueva: Path | None = None) -> None:
+            self.moviendo = None
+            self.refrescar(nueva.name if nueva is not None else None)
+
+        def terminar(nueva) -> None:
+            self.linea.configure(text=texto)
+            fin(nueva)
+
+        def fallar(e: BaseException) -> None:
+            fin()
+            self.mostrar_error(e)
+
+        # Primero termina el hilo de audio, que puede estar cerrando los WAV, y
+        # después el de archivos, que puede estar exportando.
+        self.en_hilo(self.audio, lambda: None, lambda _r: self.en_hilo(
+            self.archivos, tarea, terminar, fallar))
 
     # ----------------------------------------------------------------------
     # Transcripción
@@ -732,6 +939,11 @@ class Aplicacion(ctk.CTk):
     def procesar_seleccion(self) -> None:
         r = self.seleccion()
         if r is None:
+            return
+        puesto = self._puesto(r.carpeta)
+        if puesto is not None:
+            del self.cola[puesto]
+            self.refrescar()
             return
         # Un modelo elegido a mano obliga a transcribir de nuevo.
         repetir = self.cfg.modelo != "auto"
@@ -753,12 +965,28 @@ class Aplicacion(ctk.CTk):
         self.procesar(r.carpeta, None if p == AUTOMATICO else int(p), repetir)
 
     def procesar(self, carpeta: Path, personas: int | None = None, repetir: bool = False) -> None:
-        if self.procesando is not None:
-            self.linea.configure(
-                text="Hay otra transcripción en curso. Pulsa Transcribir cuando termine.")
+        if self.procesando == carpeta or self._puesto(carpeta) is not None:
             return
+        self.cola.append(Trabajo(carpeta, replace(self.cfg), personas, repetir))
+        if self.procesando is not None or self.estado != PARADO:
+            self.linea.configure(text="Añadida a la cola de transcripciones.")
+        self.refrescar()
+        self._siguiente()
+
+    def _siguiente(self) -> None:
+        """Empieza el primer trabajo de la cola, si se puede."""
+        # Empezar a transcribir mientras se graba podría provocar cortes de audio.
+        if self.procesando is not None or self.estado != PARADO or self._cerrando:
+            return
+        while self.cola:
+            trabajo = self.cola.pop(0)
+            if trabajo.carpeta.exists():
+                self._lanzar(trabajo)
+                return
+
+    def _lanzar(self, trabajo: Trabajo) -> None:
+        carpeta = trabajo.carpeta
         self.visor.exportar_pendiente()
-        cfg = replace(self.cfg)
         self.procesando = carpeta
         self.cancelar.clear()
         self.progreso.set(0)
@@ -777,7 +1005,8 @@ class Aplicacion(ctk.CTk):
             windows.impedir_suspension(True)
             try:
                 return flujo.procesar(
-                    carpeta, cfg, personas, repetir, al_estado, al_progreso, self.cancelar)
+                    carpeta, trabajo.cfg, trabajo.personas, trabajo.repetir, al_estado,
+                    al_progreso, self.cancelar)
             finally:
                 windows.impedir_suspension(False)
 
@@ -788,7 +1017,18 @@ class Aplicacion(ctk.CTk):
         if self.procesando is None or self.cancelar.is_set():
             return
         if texto is not None:
+            self._etapa, self._referencia = texto, None
             self.linea.configure(text=texto)
+        elif self._referencia is None:
+            # El avance puede no empezar en cero: se mide desde el primero.
+            self._referencia = (time.monotonic(), p)
+        else:
+            t0, p0 = self._referencia
+            transcurrido, hecho = time.monotonic() - t0, p - p0
+            if transcurrido > 3 and hecho > 0.03:
+                resta = transcurrido * (1 - p) / hecho
+                self.linea.configure(
+                    text=f"{self._etapa}  ·  quedan {_restante(resta)} de este paso")
         self.progreso.set(p)
 
     def _fin_proceso(self, texto: str) -> None:
@@ -800,6 +1040,10 @@ class Aplicacion(ctk.CTk):
         # Si se está grabando no se cambia la reunión que se está viendo.
         self.refrescar(nombre if self.estado == PARADO else None)
         self._actualizar_botones()
+        self._llamar_atencion()
+        if self.estado == PARADO and not self._cerrando and self._en_segundo_plano():
+            self.bell()
+        self._siguiente()
 
     def _procesada(self, p: flujo.Procesado) -> None:
         self._fin_proceso(f"Listo: {p.transcripcion.titulo}. Archivos .txt, .docx y .srt creados.")
@@ -887,6 +1131,7 @@ class Aplicacion(ctk.CTk):
     def abrir_ajustes(self) -> None:
         self.boton_ajustes.configure(state="disabled")
         self.visor.parar()
+        self.parar_prueba()
 
         def consultar():
             # En el hilo de audio: no puede coincidir con una grabación.
@@ -955,10 +1200,12 @@ class Aplicacion(ctk.CTk):
             NOMBRE_APP, "Se está grabando. ¿Detener, guardar y salir?", parent=self):
             return
         if self.procesando is not None and not messagebox.askokcancel(
-            NOMBRE_APP, "Hay una transcripción en curso. ¿Cancelarla y salir? El audio se conserva.",
-            parent=self):
+            NOMBRE_APP, "Hay una transcripción en curso"
+            + (f" y {len(self.cola)} en cola" if self.cola else "")
+            + ". ¿Cancelar y salir? El audio se conserva.", parent=self):
             return
         self._cerrando = True
+        self.parar_prueba()
         self.visor.parar()
         self.visor.exportar_pendiente()
         self.cancelar_proceso()
@@ -969,7 +1216,7 @@ class Aplicacion(ctk.CTk):
             self._esperar_cierre()
 
     def _esperar_cierre(self) -> None:
-        if self.procesando is not None:
+        if self.procesando is not None or self.prueba is not None or self.moviendo is not None:
             self.after(100, self._esperar_cierre)
             return
         if self.atajo is not None:

@@ -130,6 +130,9 @@ se dejan en «Predeterminado de Windows» se usan los del sistema.
 
 ### Grabar
 
+Antes de una reunión importante conviene pulsar **Probar**: escucha el micrófono
+y la salida unos segundos, sin guardar nada, y dice si el nivel es correcto.
+
 1. Pulsa **Grabar** o `Ctrl+Alt+R`. El atajo funciona aunque la ventana esté
    minimizada.
 2. Escribe un título y confirma que los participantes están avisados.
@@ -155,6 +158,9 @@ demás. Las notificaciones y la música del equipo quedan grabadas.
    Ayuda a separar las voces.
 3. Pulsa **Transcribir**. Se puede cancelar y el audio se conserva. Con
    **Transcribir al terminar de grabar**, el proceso empieza solo.
+
+Si hay otra en curso o se está grabando, la reunión queda **en cola**. Abajo se
+estima lo que falta de cada paso, y al terminar avisa en la barra de tareas.
 
 Para repetir con otro número de personas, pulsa **Repetir** y responde «No»: se
 separan de nuevo las voces sin volver a transcribir.
@@ -182,6 +188,11 @@ Cada corrección se guarda al momento y los archivos exportados se actualizan a
 los pocos segundos. **Repetir** la transcripción no conserva las correcciones,
 pero guarda antes una copia del documento corregido.
 
+### Ordenar las grabaciones
+
+**Cambiar título** (F2) renombra también la carpeta y los archivos exportados.
+**Borrar** (Supr) la mueve a la papelera. No se puede mientras está en uso.
+
 ### Poner nombres y exportar
 
 El botón **Nombres** muestra cuánto habla cada persona y dos frases suyas, para
@@ -197,22 +208,9 @@ editó a mano, esa versión se conserva como `transcripcion (editado fecha)`.
 
 ## Qué archivos genera
 
-Cada reunión tiene su carpeta en `Documents\Reuniones`:
-
-```
-2026-03-09_09-15_Revisión-del-sprint/
-├── mic.wav                       Lo que dice quien graba
-├── sistema.wav                   Lo que dicen los demás
-├── sesion.json                   Título, fecha, dispositivos y avisos
-├── mic.transcripcion.json        Palabras con su tiempo, por pista
-├── sistema.transcripcion.json
-├── sistema.diarizacion.json      Quién habla en cada momento
-├── transcripcion.json            El documento del que salen los demás
-├── exportados.json               Huellas para detectar ediciones a mano
-├── transcripcion.txt
-├── transcripcion.docx
-└── transcripcion.srt
-```
+Cada reunión tiene su carpeta en `Documents\Reuniones`, con el audio de las dos
+pistas, la transcripción en tres formatos y los datos intermedios, detallados en
+[docs/CONSOLA-Y-CONFIGURACION.md](docs/CONSOLA-Y-CONFIGURACION.md#archivos-de-una-reunión).
 
 El texto sigue este formato:
 
@@ -246,6 +244,7 @@ sin Python, se siguen los pasos de
 |---|---|
 | Graba otro micrófono | Elegirlo en Ajustes; `cli.py dispositivos` los lista |
 | La pista del sistema sale vacía | La reunión sonaba por otra salida: elegirla en Ajustes |
+| El sonido distorsiona o casi no se oye | Pulsar **Probar** y seguir el consejo |
 | No se encuentra ningún micrófono | Revisar Privacidad y seguridad, Micrófono, en Windows |
 | El atajo está ocupado | Otro programa lo usa; se cambia en Ajustes |
 | Mis frases aparecen repetidas | Los altavoces entran por el micrófono: usar auriculares |
@@ -306,7 +305,7 @@ vigilaron las conexiones de red y no se detectó ninguna.
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Son 150 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
+Son 191 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
 pistas, los reintentos, la asignación de hablantes, los archivos exportados, el
 reproductor y la ventana, que se abre de verdad con el audio simulado. Durante
 unos segundos aparecen ventanas en pantalla.
@@ -386,7 +385,8 @@ la GPU devolvía texto corrupto y el proceso terminaba con normalidad.
   grabación.
 - **Los subtítulos largos tienen tiempos aproximados.** Al dividir una frase, el
   tiempo se reparte según la longitud del texto.
-- **El audio ocupa unos 0,7 GB por hora.** No se comprime ni se borra solo.
+- **El audio ocupa unos 0,7 GB por hora.** No se comprime ni se borra solo; si el
+  disco está casi lleno, la grabación se detiene y se guarda.
 - **No hay integración continua ni ejecutable publicado.** Las pruebas se
   ejecutan en local y el `.exe` hay que construirlo.
 - **La licencia MIT cubre solo este código.** Los modelos y las librerías no se

@@ -45,6 +45,13 @@ Genera una carpeta que funciona sin Python, con `Transcriptor.exe` y
 .\.venv\Scripts\python.exe construir.py
 ```
 
+Se construye aparte y la versión anterior se reemplaza al final. Si en ese momento
+está abierta, se conservan las dos; después de cerrarla basta con:
+
+```powershell
+.\.venv\Scripts\python.exe construir.py --cambiar
+```
+
 El resultado queda en `dist\Transcriptor`. Hay que conservar la carpeta entera:
 el `.exe` solo no funciona. Con las librerías de AMD ocupa 1,29 GB, sin contar
 los modelos. Esas librerías se incluyen únicamente para la GPU indicada en

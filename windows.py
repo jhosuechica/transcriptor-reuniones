@@ -7,11 +7,13 @@ import logging
 import threading
 from collections.abc import Callable
 from ctypes import wintypes
+from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_shell32 = ctypes.WinDLL("shell32")
 _user32.RegisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT)
 _user32.UnregisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int)
 _user32.GetMessageW.argtypes = (
@@ -34,6 +36,10 @@ YA_REGISTRADO = 1409
 YA_EXISTE = 183
 PRIORIDAD_BAJA = 0x4000         # BELOW_NORMAL_PRIORITY_CLASS
 CONTINUO, SISTEMA_ACTIVO = 0x80000000, 0x1
+
+
+class ErrorPapelera(Exception):
+    """Error al borrar, con un mensaje apto para mostrar al usuario."""
 
 
 class ErrorAtajo(Exception):
@@ -119,6 +125,55 @@ class InstanciaUnica:
         if self._mutex:
             _kernel32.CloseHandle(self._mutex)
             self._mutex = None
+
+
+class _OperacionArchivos(ctypes.Structure):
+    _fields_ = (
+        ("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
+        ("pTo", wintypes.LPCWSTR), ("fFlags", wintypes.WORD), ("cancelada", wintypes.BOOL),
+        ("hNameMappings", wintypes.LPVOID), ("lpszProgressTitle", wintypes.LPCWSTR),
+    )
+
+
+def a_papelera(ruta: Path) -> None:
+    """Mueve una carpeta o archivo a la papelera de reciclaje."""
+    ruta = ruta.resolve()
+    if not ruta.exists():
+        raise ErrorPapelera(f"No existe {ruta}")
+    # La lista de rutas termina con dos caracteres nulos.
+    origen = ctypes.create_unicode_buffer(str(ruta) + "\0")
+    op = _OperacionArchivos()
+    op.wFunc = 3                # FO_DELETE
+    op.pFrom = ctypes.cast(origen, wintypes.LPCWSTR)
+    # ALLOWUNDO (papelera), NOCONFIRMATION, NOERRORUI y WANTNUKEWARNING: si no
+    # cabe en la papelera, Windows pregunta antes de borrarlo para siempre.
+    op.fFlags = 0x0040 | 0x0010 | 0x0400 | 0x4000
+    ole = ctypes.OleDLL("ole32")
+    ole.CoInitialize(None)
+    try:
+        codigo = _shell32.SHFileOperationW(ctypes.byref(op))
+    finally:
+        ole.CoUninitialize()
+    if op.cancelada:
+        raise ErrorPapelera("Se canceló el borrado.")
+    if codigo or ruta.exists():
+        log.error("SHFileOperation devolvió %s para %s", codigo, ruta)
+        raise ErrorPapelera(
+            f"No se pudo mover a la papelera {ruta.name}. Cierra los archivos de esa reunión "
+            "que estén abiertos y vuelve a intentarlo.")
+
+
+class _Parpadeo(ctypes.Structure):
+    _fields_ = (
+        ("cbSize", wintypes.UINT), ("hwnd", wintypes.HWND), ("dwFlags", wintypes.DWORD),
+        ("uCount", wintypes.UINT), ("dwTimeout", wintypes.DWORD),
+    )
+
+
+def llamar_atencion(ventana: int) -> None:
+    """Hace parpadear la ventana en la barra de tareas hasta que se mire."""
+    p = _Parpadeo(ctypes.sizeof(_Parpadeo), ventana, 0x3 | 0xC, 0, 0)
+    _user32.FlashWindowEx(ctypes.byref(p))
 
 
 def impedir_suspension(activo: bool) -> None:

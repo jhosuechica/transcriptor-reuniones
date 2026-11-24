@@ -30,11 +30,13 @@ import flujo
 import merger
 import transcriber
 from recorder import (
+    ESPACIO_PARADA,
     ErrorGrabacion,
     Grabadora,
     dbfs,
     elegir_loopback,
     elegir_microfono,
+    espacio_libre,
     listar_dispositivos,
 )
 
@@ -82,6 +84,7 @@ def cmd_grabar(cfg: config.Config, args) -> int:
     for aviso in g.avisos:
         print("AVISO:", aviso)
     mostrados: set[str] = set()
+    vueltas = 0
     try:
         while args.segundos is None or g.transcurrido < args.segundos:
             t = int(g.transcurrido)
@@ -95,6 +98,12 @@ def cmd_grabar(cfg: config.Config, args) -> int:
                 if p not in mostrados:
                     mostrados.add(p)
                     print(f"\nERROR: {p}")
+            # Cada 10 s, porque se espera 0,1 s en cada vuelta.
+            vueltas += 1
+            libre = espacio_libre(carpeta) if vueltas % 100 == 0 else None
+            if libre is not None and libre < ESPACIO_PARADA:
+                print("\nAVISO: el disco está casi lleno. Se detiene la grabación.")
+                break
             time.sleep(0.1)
     except KeyboardInterrupt:
         pass

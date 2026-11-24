@@ -38,3 +38,24 @@ crea la primera vez que se abre la aplicación:
 | `transcribir_al_terminar` | `false` | Procesar al detener |
 
 Con `auto` se usa el mejor modelo descargado si hay GPU y el más rápido si no.
+
+---
+
+## Archivos de una reunión
+
+Cada reunión tiene su carpeta en `Documents\Reuniones`:
+
+```
+2026-03-09_09-15_Revisión-del-sprint/
+├── mic.wav                       Lo que dice quien graba
+├── sistema.wav                   Lo que dicen los demás
+├── sesion.json                   Título, fecha, dispositivos y avisos
+├── mic.transcripcion.json        Palabras con su tiempo, por pista
+├── sistema.transcripcion.json
+├── sistema.diarizacion.json      Quién habla en cada momento
+├── transcripcion.json            El documento del que salen los demás
+├── exportados.json               Huellas para detectar ediciones a mano
+├── transcripcion.txt
+├── transcripcion.docx
+└── transcripcion.srt
+```

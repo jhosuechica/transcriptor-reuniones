@@ -16,6 +16,7 @@ import logging
 import math
 import queue
 import re
+import shutil
 import threading
 import time
 import wave
@@ -32,6 +33,12 @@ from config import FRECUENCIA, Config
 log = logging.getLogger(__name__)
 
 SILENCIO_DBFS = -120.0
+
+# Dos pistas mono de 16 bits: 0,69 GB por hora.
+BYTES_POR_SEGUNDO = 2 * 2 * FRECUENCIA
+ESPACIO_MINIMO = 500_000_000    # con menos no se empieza a grabar
+ESPACIO_PARADA = 200_000_000    # con menos se detiene, para poder cerrar bien
+ESPACIO_AVISO = 2_000_000_000   # unas tres horas
 
 
 class ErrorGrabacion(Exception):
@@ -440,6 +447,107 @@ class Pista:
 
 
 # --------------------------------------------------------------------------
+# Espacio y niveles
+# --------------------------------------------------------------------------
+
+
+def espacio_libre(carpeta: Path) -> int | None:
+    """Bytes libres en el disco de la carpeta, exista o no todavía."""
+    for c in (carpeta, *carpeta.parents):
+        if c.exists():
+            try:
+                return shutil.disk_usage(c).free
+            except OSError:
+                log.warning("No se pudo consultar el espacio de %s", c, exc_info=True)
+                return None
+    return None
+
+
+def tiempo_disponible(libre: int) -> str:
+    minutos = max(0, libre - ESPACIO_PARADA) // BYTES_POR_SEGUNDO // 60
+    return f"{minutos // 60} h {minutos % 60} min" if minutos >= 60 else f"{minutos} min"
+
+
+def valorar_niveles(mic: float, sistema: float) -> list[str]:
+    """Explica los picos (dBFS) medidos en una prueba."""
+    if mic < -60:
+        textos = ["Micrófono: no capta nada. Comprueba que es el correcto en Ajustes y que no "
+                  "está silenciado."]
+    elif mic > -3:
+        textos = [f"Micrófono: demasiado alto ({mic:.0f} dB) y puede distorsionar. Baja su "
+                  "volumen en la configuración de sonido de Windows."]
+    elif mic < -30:
+        textos = [f"Micrófono: muy bajo ({mic:.0f} dB). Acércate o sube su volumen en la "
+                  "configuración de sonido de Windows."]
+    else:
+        textos = [f"Micrófono: nivel correcto (máximo {mic:.0f} dB)."]
+    if sistema < -60:
+        textos.append("Sistema: no sonó nada. Para comprobarlo, repite la prueba con un vídeo "
+                      "o una llamada sonando.")
+    else:
+        textos.append(f"Sistema: se oye (máximo {sistema:.0f} dB).")
+    return textos
+
+
+class PruebaNiveles:
+    """Mide los niveles unos segundos. No guarda el audio en ningún sitio."""
+
+    DURACION = 15.0
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.mic = EstadoPista()
+        self.sistema = EstadoPista()
+        self.avisos: list[str] = []
+        self._parar = threading.Event()
+
+    def parar(self) -> None:
+        self._parar.set()
+
+    def ejecutar(self) -> None:
+        """Se bloquea hasta terminar. Debe llamarse desde el hilo de audio."""
+        if self._parar.is_set():
+            return
+        streams: list = []
+        pa = pyaudio.PyAudio()
+        try:
+            disp_mic, aviso_mic = elegir_microfono(pa, self.cfg.microfono)
+            disp_sis, aviso_sis = elegir_loopback(pa, self.cfg.salida)
+            self.avisos += [a for a in (aviso_mic, aviso_sis) if a]
+            for disp, estado in ((disp_mic, self.mic), (disp_sis, self.sistema)):
+                try:
+                    streams.append(self._abrir(pa, disp, estado))
+                except (OSError, ValueError) as e:
+                    raise ErrorGrabacion(f"No se pudo abrir '{disp['name']}': {e}") from e
+            self._parar.wait(self.DURACION)
+        finally:
+            for s in streams:
+                try:
+                    s.close()
+                except OSError:
+                    log.warning("Error al cerrar la prueba", exc_info=True)
+            pa.terminate()
+
+    @staticmethod
+    def _abrir(pa: pyaudio.PyAudio, disp: dict, estado: EstadoPista):
+        frecuencia, canales = int(disp["defaultSampleRate"]), int(disp["maxInputChannels"])
+
+        def callback(datos, _n, _tiempos, _banderas):
+            mono = a_mono(datos, canales)
+            if len(mono):
+                pico = dbfs(float(np.abs(mono.astype(np.int32)).max()))
+                estado.pico_dbfs = pico
+                estado.pico_max_dbfs = max(estado.pico_max_dbfs, pico)
+            return None, pyaudio.paContinue
+
+        return pa.open(
+            format=pyaudio.paInt16, channels=canales, rate=frecuencia, input=True,
+            input_device_index=disp["index"], frames_per_buffer=frecuencia // 50,
+            stream_callback=callback,
+        )
+
+
+# --------------------------------------------------------------------------
 # Grabadora
 # --------------------------------------------------------------------------
 
@@ -492,6 +600,11 @@ class Grabadora:
             raise ErrorGrabacion("Ya hay una grabación en curso.")
         self.avisos = []
         self.carpeta = None
+        libre = espacio_libre(Path(self.cfg.carpeta_reuniones))
+        if libre is not None and libre < ESPACIO_MINIMO:
+            raise ErrorGrabacion(
+                f"Solo quedan {libre / 1e9:.1f} GB libres en el disco de las reuniones. "
+                "Libera espacio antes de grabar.")
         # Se crea en cada grabación para detectar dispositivos recién conectados.
         self._pa = pyaudio.PyAudio()
         try:

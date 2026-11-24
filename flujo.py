@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import threading
 import wave
@@ -18,7 +19,8 @@ import merger
 import reproductor
 import transcriber
 from config import Config
-from recorder import ErrorGrabacion
+from recorder import ErrorGrabacion, nombre_seguro
+from windows import ErrorPapelera
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ log = logging.getLogger(__name__)
 ERRORES = (
     ErrorGrabacion, transcriber.ErrorTranscripcion, diarizer.ErrorDiarizacion,
     merger.ErrorUnion, exporter.ErrorExportacion, reproductor.ErrorReproduccion,
+    ErrorPapelera,
 )
 
 GRABADA, TRANSCRITA, INTERRUMPIDA = "Grabada", "Transcrita", "Interrumpida"
@@ -90,6 +93,45 @@ def listar(raiz: Path) -> list[Reunion]:
         ))
     # El nombre de la carpeta empieza por la fecha.
     return sorted(reuniones, key=lambda r: r.carpeta.name, reverse=True)
+
+
+def renombrar_reunion(carpeta: Path, titulo: str) -> Path:
+    """Cambia el título y el nombre de la carpeta. Devuelve la carpeta nueva."""
+    titulo = re.sub(r"\s+", " ", titulo).strip()
+    if not titulo or not titulo.isprintable():
+        raise ErrorGrabacion("El título está vacío o no es válido.")
+    if len(titulo) > 100:
+        raise ErrorGrabacion("El título supera los 100 caracteres.")
+    nueva = carpeta
+    fecha = re.match(r"\d{4}-\d{2}-\d{2}_\d{2}-\d{2}_", carpeta.name)
+    if fecha:       # solo las carpetas con el nombre que pone la aplicación
+        base, n = fecha[0] + nombre_seguro(titulo), 1
+        nueva = carpeta.with_name(base)
+        # En Windows, cambiar solo mayúsculas apunta a la misma carpeta.
+        while nueva.exists() and not nueva.samefile(carpeta):
+            n += 1
+            nueva = carpeta.with_name(f"{base}_{n}")
+    # Es lo único que suele fallar: se hace antes de cambiar nada más.
+    try:
+        if nueva.name != carpeta.name:
+            carpeta.rename(nueva)
+    except OSError as e:
+        raise ErrorGrabacion(
+            "No se pudo cambiar el nombre. Cierra los archivos de esa reunión que estén "
+            f"abiertos y vuelve a intentarlo. Detalle: {e}") from e
+    sesion = leer_sesion(nueva) | {"titulo": titulo}
+    temporal = nueva / "sesion.json.tmp"
+    try:
+        temporal.write_text(json.dumps(sesion, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporal.replace(nueva / "sesion.json")
+    except OSError as e:
+        raise ErrorGrabacion(f"No se pudo guardar el título: {e}") from e
+    if (nueva / "transcripcion.json").exists():
+        t = merger.cargar(nueva)
+        t.titulo = titulo
+        merger.guardar(t, nueva)
+        exporter.exportar(t, nueva)
+    return nueva
 
 
 def _guardar_copia(carpeta: Path) -> str:
