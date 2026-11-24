@@ -1,0 +1,7 @@
+# LF en el repositorio y en el disco, salvo lo que Windows ejecuta con CRLF
+* text=auto eol=lf
+*.bat text eol=crlf
+
+# Binarios: git no debe tocarlos
+*.png binary
+*.ico binary

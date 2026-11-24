@@ -1,0 +1,19 @@
+.venv/
+__pycache__/
+*.pyc
+logs/
+config.json
+# Nunca versionar grabaciones ni transcripciones
+Reuniones/
+*.wav
+.env
+modelos/
+vendor/
+*.transcripcion.json
+build/
+dist/
+*.flac
+transcripcion.*
+exportados.json
+# Notas de trabajo
+privado/

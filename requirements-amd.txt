@@ -1,0 +1,8 @@
+# Motor para GPU AMD (ROCm 7.2) en Windows con Python 3.12.
+# Instalar después de requirements.txt:
+#   python -m pip install --no-deps --force-reinstall -r requirements-amd.txt
+# El wheel de CTranslate2 se extrae de rocm-python-wheels-Windows.zip:
+#   https://github.com/OpenNMT/CTranslate2/releases/tag/v4.9.1
+./vendor/ctranslate2-4.9.1-cp312-cp312-win_amd64.whl
+https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_core-7.2.0.dev0-py3-none-win_amd64.whl
+https://repo.radeon.com/rocm/windows/rocm-rel-7.2/rocm_sdk_libraries_custom-7.2.0.dev0-py3-none-win_amd64.whl
