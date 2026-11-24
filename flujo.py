@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 import wave
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from pathlib import Path
 import diarizer
 import exporter
 import merger
+import reproductor
 import transcriber
 from config import Config
 from recorder import ErrorGrabacion
@@ -23,7 +25,7 @@ log = logging.getLogger(__name__)
 # Errores con un mensaje pensado para mostrarse al usuario.
 ERRORES = (
     ErrorGrabacion, transcriber.ErrorTranscripcion, diarizer.ErrorDiarizacion,
-    merger.ErrorUnion, exporter.ErrorExportacion,
+    merger.ErrorUnion, exporter.ErrorExportacion, reproductor.ErrorReproduccion,
 )
 
 GRABADA, TRANSCRITA, INTERRUMPIDA = "Grabada", "Transcrita", "Interrumpida"
@@ -90,6 +92,19 @@ def listar(raiz: Path) -> list[Reunion]:
     return sorted(reuniones, key=lambda r: r.carpeta.name, reverse=True)
 
 
+def _guardar_copia(carpeta: Path) -> str:
+    base = f"transcripcion (corregida {datetime.now():%Y-%m-%d %H-%M-%S})"
+    copia, n = carpeta / f"{base}.json", 2
+    while copia.exists():
+        copia, n = carpeta / f"{base} {n}.json", n + 1
+    try:
+        shutil.copy2(carpeta / "transcripcion.json", copia)
+    except OSError as e:
+        # Sin copia no se reemplaza: se perdería el trabajo del usuario.
+        raise merger.ErrorUnion(f"No se pudo guardar una copia de las correcciones: {e}") from e
+    return copia.name
+
+
 def procesar(
     carpeta: Path,
     cfg: Config,
@@ -133,9 +148,15 @@ def procesar(
     if fallo:
         t.avisos.append(fallo)
     try:
-        avisos_nombres = merger.heredar_nombres(t, merger.cargar(carpeta))
+        anterior = merger.cargar(carpeta)
     except merger.ErrorUnion:
         avisos_nombres = []     # primera vez, o archivo anterior ilegible
+    else:
+        avisos_nombres = merger.heredar_nombres(t, anterior)
+        if anterior.corregida:
+            avisos_nombres.append(
+                "Las correcciones hechas a mano no pasan a la transcripción nueva. La anterior "
+                f"se conserva en {_guardar_copia(carpeta)}.")
     merger.guardar(t, carpeta)
     e = exporter.exportar(t, carpeta)
     return Procesado(t, e, t.avisos + avisos_nombres, d.segundos_proceso, fallo is not None)

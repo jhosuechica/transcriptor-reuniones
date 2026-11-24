@@ -299,7 +299,7 @@ class TestVentana(unittest.TestCase):
         self.assertIn("Grabar", self.app.boton_grabar.cget("text"))
 
     def test_muestra_el_texto(self):
-        self.assertIn("[00:00:03] Hablante 1: Buenas.", self.app.texto.get("1.0", "end"))
+        self.assertIn("Hablante 1   00:00:03\nBuenas.", self.app.texto.get("1.0", "end"))
 
     def test_transcripcion_danada(self):
         (self.demo / "transcripcion.json").write_text("{")
@@ -315,8 +315,10 @@ class TestVentana(unittest.TestCase):
         d.campos["h1"].insert(0, "Ana")
         d.campos["yo"].delete(0, "end")     # vacío: se queda como estaba
         d.aceptar()
-        self.bombear(lambda: "Ana: Buenas." in self.app.texto.get("1.0", "end"))
-        self.assertIn("Yo: Hola.", (self.demo / "transcripcion.txt").read_text(encoding="utf-8"))
+        self.bombear(lambda: "Ana   00:00:03" in self.app.texto.get("1.0", "end"))
+        txt = self.demo / "transcripcion.txt"
+        self.bombear(lambda: txt.exists() and "Ana: Buenas." in txt.read_text(encoding="utf-8"))
+        self.assertIn("Yo: Hola.", txt.read_text(encoding="utf-8"))
 
     def test_exportar_con_archivo_abierto(self):
         exporter.exportar(merger.cargar(self.demo), self.demo)

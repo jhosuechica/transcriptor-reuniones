@@ -28,8 +28,7 @@ resto de participantes.
 - [Puesta en marcha](#puesta-en-marcha)
 - [Uso de la aplicación](#uso-de-la-aplicación)
 - [Qué archivos genera](#qué-archivos-genera)
-- [Uso desde la consola](#uso-desde-la-consola)
-- [Configuración](#configuración)
+- [Consola y configuración](#consola-y-configuración)
 - [GPU y ejecutable](#gpu-y-ejecutable)
 - [Solución de problemas](#solución-de-problemas)
 - [Cómo funciona](#cómo-funciona)
@@ -160,6 +159,29 @@ demás. Las notificaciones y la música del equipo quedan grabadas.
 Para repetir con otro número de personas, pulsa **Repetir** y responde «No»: se
 separan de nuevo las voces sin volver a transcribir.
 
+### Escuchar y corregir
+
+Con **doble clic** en una frase se oye la reunión desde ese momento, con las dos
+pistas mezcladas y la frase en curso resaltada. Un clic solo la selecciona.
+
+**Corregir** abre la frase elegida para cambiar el texto o la persona, y permite
+avanzar por las siguientes oyendo cada una. Con el botón derecho se puede además
+reasignar o borrar una frase.
+
+![Diálogo para corregir una frase](docs/img/corregir.png)
+
+| Tecla, sobre el texto | Acción |
+|---|---|
+| Espacio | Escuchar o pausar |
+| Flechas izquierda y derecha | Retroceder o avanzar 5 segundos |
+| F2 | Corregir la frase |
+| Ctrl+Z | Deshacer |
+| Ctrl+Intro, en el diálogo | Guardar y pasar a la siguiente |
+
+Cada corrección se guarda al momento y los archivos exportados se actualizan a
+los pocos segundos. **Repetir** la transcripción no conserva las correcciones,
+pero guarda antes una copia del documento corregido.
+
 ### Poner nombres y exportar
 
 El botón **Nombres** muestra cuánto habla cada persona y dos frases suyas, para
@@ -201,41 +223,11 @@ El texto sigue este formato:
 
 ---
 
-## Uso desde la consola
+## Consola y configuración
 
-Todo lo que hace la ventana se puede hacer por comandos. Si no se indica una
-carpeta, se usa la última grabación.
-
-| Comando | Qué hace |
-|---|---|
-| `cli.py dispositivos` | Lista micrófonos y salidas; marca los elegidos |
-| `cli.py grabar --titulo "Sprint"` | Graba hasta pulsar Ctrl+C |
-| `cli.py verificar` | Analiza una grabación: niveles, duración y saturación |
-| `cli.py procesar` | Transcribe, separa voces, une y exporta |
-| `cli.py procesar --hablantes 3` | Igual, indicando las personas |
-| `cli.py renombrar` | Pregunta los nombres; con `h1=Ana` cambia uno directamente |
-| `cli.py exportar` | Vuelve a crear los tres archivos |
-
----
-
-## Configuración
-
-La ventana cubre lo habitual. Los valores se guardan en `config.json`, que se
-crea la primera vez que se abre la aplicación:
-
-| Clave | Valor inicial | Para qué sirve |
-|---|---|---|
-| `nombre_usuario` | `Yo` | Nombre de la pista del micrófono |
-| `carpeta_reuniones` | `Documents\Reuniones` | Dónde se guarda todo |
-| `microfono`, `salida` | vacío | Parte del nombre del dispositivo |
-| `modelo` | `auto` | Modelo de transcripción |
-| `dispositivo` | `auto` | `auto`, `gpu` o `cpu` |
-| `vocabulario` | vacío | Nombres y términos frecuentes, separados por comas |
-| `atajo` | `ctrl+alt+r` | Letra, número o F1 a F24, con ctrl o alt |
-| `indicador_flotante` | `true` | Indicador rojo al grabar |
-| `transcribir_al_terminar` | `false` | Procesar al detener |
-
-Con `auto` se usa el mejor modelo descargado si hay GPU y el más rápido si no.
+Todo lo que hace la ventana se puede hacer también por comandos. La lista, junto
+con las claves de `config.json`, está en
+[docs/CONSOLA-Y-CONFIGURACION.md](docs/CONSOLA-Y-CONFIGURACION.md).
 
 ---
 
@@ -314,10 +306,10 @@ vigilaron las conexiones de red y no se detectó ninguna.
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Son 104 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
-pistas, los reintentos, la asignación de hablantes, los archivos exportados y la
-ventana, que se abre de verdad con una grabadora simulada. Durante unos segundos
-aparecen ventanas en pantalla.
+Son 150 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
+pistas, los reintentos, la asignación de hablantes, los archivos exportados, el
+reproductor y la ventana, que se abre de verdad con el audio simulado. Durante
+unos segundos aparecen ventanas en pantalla.
 
 La calidad de la transcripción no se prueba de forma automática.
 
@@ -328,6 +320,8 @@ La calidad de la transcripción no se prueba de forma automática.
 ```
 .
 ├── gui.py                  Ventana; las reglas de hilos están al principio
+├── visor.py                Panel para leer, escuchar y corregir
+├── componentes.py          Base común de los diálogos
 ├── cli.py                  Los mismos pasos por consola
 ├── flujo.py                Lo que comparten ambas: listar y procesar
 ├── recorder.py             Las dos pistas y su sincronización
@@ -335,6 +329,7 @@ La calidad de la transcripción no se prueba de forma automática.
 ├── diarizer.py             Separación de voces
 ├── merger.py               Une las pistas y gestiona los nombres
 ├── exporter.py             Archivos finales, sin perder ediciones a mano
+├── reproductor.py          Suena en el hilo de audio, con las pistas mezcladas
 ├── proceso.py              Ejecuta el trabajo pesado en otro proceso
 ├── windows.py              Atajo global, instancia única y suspensión
 ├── config.py               Configuración, rutas y registro
@@ -345,6 +340,7 @@ La calidad de la transcripción no se prueba de forma automática.
 ├── recursos/               Icono
 ├── tests/                  Una suite por módulo principal
 └── docs/
+    ├── CONSOLA-Y-CONFIGURACION.md Comandos y claves
     ├── GPU-Y-EJECUTABLE.md Pasos opcionales, fuera del README por extensión
     ├── adr/                Decisiones de diseño
     └── img/                Capturas, con datos inventados
@@ -383,8 +379,11 @@ la GPU devolvía texto corrupto y el proceso terminaba con normalidad.
   no se aísla una aplicación concreta.
 - **La GPU se aprovecha a medias.** No acelera la separación de voces, y en la
   transcripción se usa un cálculo más lento por el fallo del ADR-0003.
-- **La transcripción no se corrige dentro de la aplicación.** Hay que editar los
-  archivos exportados.
+- **Las correcciones no sobreviven a una nueva transcripción.** Se guarda una
+  copia, pero no hay forma de aplicarlas al documento nuevo ni de restaurarla
+  desde la ventana.
+- **No se puede escuchar mientras se graba.** Lo que sonara quedaría en la
+  grabación.
 - **Los subtítulos largos tienen tiempos aproximados.** Al dividir una frase, el
   tiempo se reparte según la longitud del texto.
 - **El audio ocupa unos 0,7 GB por hora.** No se comprime ni se borra solo.

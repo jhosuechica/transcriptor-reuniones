@@ -13,7 +13,7 @@ vendor/
 build/
 dist/
 *.flac
-transcripcion.*
+transcripcion*.*
 exportados.json
 # Notas de trabajo
 privado/

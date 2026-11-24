@@ -43,12 +43,14 @@ import merger
 import proceso
 import transcriber
 import windows
+from componentes import (
+    AMARILLO, GRIS, ICONO, NOMBRE_APP, ROJO, ROJO_OSCURO, VERDE, Dialogo, poner_icono,
+)
 from recorder import SILENCIO_DBFS, Grabadora, listar_dispositivos
+from visor import DialogoCorregir, Visor
 
 log = logging.getLogger(__name__)
 
-NOMBRE_APP = "Transcriptor de reuniones"
-ICONO = Path(__file__).resolve().parent / "recursos" / "icono.ico"
 CONSENTIMIENTO = (
     "Avisa a los participantes de que vas a grabar y transcribir la reunión, "
     "y pide su consentimiento antes de continuar."
@@ -60,65 +62,9 @@ CAIDA_POR_PASO = 2.0        # dB que baja el medidor en cada paso, para poder le
 ESPERA_SIN_SENAL = 10.0     # s en silencio antes de avisar
 PREDETERMINADO = "Predeterminado de Windows"
 AUTOMATICO = "Automático"
-ROJO, VERDE, AMARILLO = "#d33a3a", "#2e9e5b", "#d9a400"
-ROJO_OSCURO, GRIS = "#a82b2b", "gray50"
 
 PARADO, INICIANDO, GRABANDO, DETENIENDO = "parado", "iniciando", "grabando", "deteniendo"
 DISPOSITIVOS_CALCULO = {"Automático": "auto", "Solo GPU": "gpu", "Solo CPU": "cpu"}
-
-
-def _poner_icono(ventana: ctk.CTk | ctk.CTkToplevel) -> None:
-    try:
-        ventana.iconbitmap(ICONO)
-    except tk.TclError:
-        log.warning("No se pudo cargar el icono %s", ICONO)
-
-
-def _centrar(ventana: tk.Misc, padre: tk.Misc, ancho: int, alto: int) -> None:
-    """Coloca un diálogo sobre la ventana o, si está minimizada, en la pantalla."""
-    escala = ctk.ScalingTracker.get_window_scaling(ventana)
-    w, h = int(ancho * escala), int(alto * escala)
-    if padre.winfo_viewable():
-        x = padre.winfo_rootx() + (padre.winfo_width() - w) // 2
-        y = padre.winfo_rooty() + (padre.winfo_height() - h) // 2
-    else:
-        x = (ventana.winfo_screenwidth() - w) // 2
-        y = (ventana.winfo_screenheight() - h) // 3
-    # CTk escala el tamaño, pero no la posición.
-    ventana.geometry(f"{ancho}x{alto}+{max(0, x)}+{max(0, y)}")
-
-
-class Dialogo(ctk.CTkToplevel):
-    """Base de los diálogos: modal, centrado y con Escape para cerrar."""
-
-    def __init__(self, app: "Aplicacion", titulo: str, ancho: int, alto: int):
-        super().__init__(app)
-        self.app = app
-        self.title(titulo)
-        _poner_icono(self)
-        _centrar(self, app, ancho, alto)
-        self.protocol("WM_DELETE_WINDOW", self.cerrar)
-        self.bind("<Escape>", lambda _e: self.cerrar())
-        # La ventana debe ser visible para poder capturar el foco.
-        self.after(150, self._enfocar)
-
-    def _enfocar(self) -> None:
-        if not self.winfo_exists():
-            return
-        self.lift()
-        self.focus_force()
-        try:
-            self.grab_set()
-        except tk.TclError:
-            log.warning("El diálogo no es modal", exc_info=True)
-        self.foco_inicial()
-
-    def foco_inicial(self) -> None:
-        pass
-
-    def cerrar(self) -> None:
-        self.grab_release()
-        self.destroy()
 
 
 class DialogoInicio(Dialogo):
@@ -346,7 +292,8 @@ class Aplicacion(ctk.CTk):
         self.eventos: queue.Queue[Callable[[], None]] = queue.Queue()
         self.audio = ThreadPoolExecutor(1, "audio")
         self.trabajo = ThreadPoolExecutor(1, "trabajo")
-        self.varios = ThreadPoolExecutor(2, "varios")
+        # Uno solo: dos exportaciones a la vez escribirían los mismos archivos.
+        self.archivos = ThreadPoolExecutor(1, "archivos")
         self.estado = PARADO
         self.carpeta_activa: Path | None = None
         self.procesando: Path | None = None
@@ -378,7 +325,7 @@ class Aplicacion(ctk.CTk):
 
     def _construir(self) -> None:
         self.title(NOMBRE_APP)
-        _poner_icono(self)
+        poner_icono(self)
         self.geometry("1080x700")
         self.minsize(900, 560)
         self.grid_columnconfigure(0, weight=2, uniform="col")
@@ -457,11 +404,9 @@ class Aplicacion(ctk.CTk):
                                            command=self.abrir_carpeta)
         for b in (self.boton_procesar, self.boton_nombres, self.boton_exportar, self.boton_carpeta):
             b.pack(side="left", padx=(0, 8))
-        self.texto = ctk.CTkTextbox(derecha, wrap="word", font=ctk.CTkFont(size=13))
-        self.texto.grid(row=2, column=0, sticky="nsew", padx=10, pady=(4, 10))
-        self.texto.tag_config("hora", foreground=GRIS)
-        self.texto.tag_config("nombre", foreground="#3b8ed0")
-        self.texto.configure(state="disabled")
+        self.visor = Visor(derecha, self)
+        self.visor.grid(row=2, column=0, sticky="nsew", padx=10, pady=(4, 10))
+        self.texto = self.visor.texto
 
         # Estado
         abajo = ctk.CTkFrame(self)
@@ -489,6 +434,8 @@ class Aplicacion(ctk.CTk):
         super()._set_appearance_mode(mode_string)
         if hasattr(self, "lista"):
             self._estilo_lista()
+        if hasattr(self, "visor"):
+            self.visor.aplicar_colores()
 
     def _estilo_lista(self) -> None:
         # La lista es de ttk, que no sigue el tema de CustomTkinter.
@@ -522,6 +469,7 @@ class Aplicacion(ctk.CTk):
                 break
             funcion()
         self._actualizar_grabacion()
+        self.visor.paso()
 
     def _limpiar_memoria(self) -> None:
         self._tarea_limpieza = self.after(LIMPIEZA_MS, self._limpiar_memoria)
@@ -585,6 +533,9 @@ class Aplicacion(ctk.CTk):
     def iniciar(self, titulo: str) -> None:
         if self.estado != PARADO:
             return
+        # La grabación espera en el mismo hilo a que deje de sonar; además, lo que
+        # sonara quedaría grabado en la pista del sistema.
+        self.visor.parar()
         self._poner_estado(INICIANDO)
         self._avisados.clear()
         self.grabadora.cfg = self.cfg
@@ -701,6 +652,9 @@ class Aplicacion(ctk.CTk):
         except flujo.ERRORES as e:
             self.mostrar_error(e)
             return
+        # Con un diálogo abierto sobre una reunión no se cambia a otra.
+        if any(isinstance(w, (DialogoNombres, DialogoCorregir)) for w in self.winfo_children()):
+            seleccionar = None
         previa = seleccionar or next(iter(self.lista.selection()), None)
         self.reuniones = {r.carpeta.name: r for r in reuniones}
         self.lista.delete(*self.lista.get_children())
@@ -736,31 +690,17 @@ class Aplicacion(ctk.CTk):
             if clave == self._mostrada:
                 return
         self._mostrada = clave
-        self.texto.configure(state="normal")
-        self.texto.delete("1.0", "end")
         if r is None:
-            self.texto.insert("end", "Todavía no hay grabaciones. Pulsa Grabar para empezar.")
-        elif r.estado != flujo.TRANSCRITA:
-            mensaje = {flujo.GRABADA: "Pulsa Transcribir para obtener el texto.",
-                       flujo.INTERRUMPIDA: "La grabación no se cerró bien, pero el audio grabado "
-                                           "hasta ese momento se puede transcribir."}[r.estado]
-            self.texto.insert(
-                "end", "Grabando…" if r.carpeta == self.carpeta_activa else mensaje)
+            self.visor.mensaje("Todavía no hay grabaciones. Pulsa Grabar para empezar.")
+        elif r.carpeta == self.carpeta_activa:
+            self.visor.mensaje("Grabando…")
+        elif r.estado == flujo.TRANSCRITA:
+            self.visor.mostrar(r.carpeta, r.duracion)
+        elif r.estado == flujo.GRABADA:
+            self.visor.mensaje("Pulsa Transcribir para obtener el texto.")
         else:
-            try:
-                t = merger.cargar(r.carpeta)
-            except merger.ErrorUnion as e:
-                self.texto.insert("end", str(e))
-            else:
-                for a in t.avisos:
-                    self.texto.insert("end", f"AVISO: {a}\n\n", "hora")
-                if not t.intervenciones:
-                    self.texto.insert("end", "No se detectó voz en la grabación.")
-                for i in t.intervenciones:
-                    self.texto.insert("end", f"[{merger.hms(i.inicio)}] ", "hora")
-                    self.texto.insert("end", f"{t.hablantes[i.hablante]}: ", "nombre")
-                    self.texto.insert("end", f"{i.texto}\n\n")
-        self.texto.configure(state="disabled")
+            self.visor.mensaje("La grabación no se cerró bien, pero el audio grabado hasta ese "
+                               "momento se puede transcribir.")
 
     def _actualizar_botones(self) -> None:
         def poner(boton, activo) -> None:
@@ -775,6 +715,7 @@ class Aplicacion(ctk.CTk):
         poner(self.boton_nombres, transcrita)
         poner(self.boton_exportar, transcrita)
         poner(self.boton_carpeta, r is not None)
+        self.visor.activar(escuchar=self.estado == PARADO, editar=transcrita)
         poner(self.boton_ajustes, self.estado == PARADO)
         poner(self.boton_cancelar, self.procesando is not None and not self.cancelar.is_set())
         self.boton_procesar.configure(text="Repetir" if transcrita else "Transcribir")
@@ -795,11 +736,16 @@ class Aplicacion(ctk.CTk):
         # Un modelo elegido a mano obliga a transcribir de nuevo.
         repetir = self.cfg.modelo != "auto"
         if r.estado == flujo.TRANSCRITA:
+            t = self.visor.transcripcion
+            correcciones = (
+                "\n\nTus correcciones no pasarán a la versión nueva; se guardará una copia."
+                if t is not None and t.corregida else "")
             respuesta = messagebox.askyesnocancel(
                 NOMBRE_APP,
                 "Esta reunión ya está transcrita. ¿Repetir también la transcripción?\n\n"
                 "Sí: transcribe de nuevo con el modelo elegido.\n"
-                "No: solo vuelve a separar a los hablantes; es más rápido.", parent=self)
+                "No: solo vuelve a separar a los hablantes; es más rápido." + correcciones,
+                parent=self)
             if respuesta is None:
                 return
             repetir = respuesta
@@ -811,6 +757,7 @@ class Aplicacion(ctk.CTk):
             self.linea.configure(
                 text="Hay otra transcripción en curso. Pulsa Transcribir cuando termine.")
             return
+        self.visor.exportar_pendiente()
         cfg = replace(self.cfg)
         self.procesando = carpeta
         self.cancelar.clear()
@@ -856,7 +803,7 @@ class Aplicacion(ctk.CTk):
 
     def _procesada(self, p: flujo.Procesado) -> None:
         self._fin_proceso(f"Listo: {p.transcripcion.titulo}. Archivos .txt, .docx y .srt creados.")
-        self._avisar_copias(p.exportacion)
+        self.avisar_copias(p.exportacion)
         # Los avisos de la transcripción ya se ven en el texto.
         nuevos = [a for a in p.avisos if a not in p.transcripcion.avisos]
         if p.incompleto:
@@ -883,43 +830,25 @@ class Aplicacion(ctk.CTk):
 
     def abrir_nombres(self) -> None:
         r = self.seleccion()
-        if r is None:
-            return
-        try:
-            t = merger.cargar(r.carpeta)
-        except merger.ErrorUnion as e:
-            self.mostrar_error(e)
+        t = self.visor.transcripcion
+        if r is None or t is None:
             return
         DialogoNombres(self, t, lambda cambios: self.renombrar(r.carpeta, cambios))
 
     def renombrar(self, carpeta: Path, cambios: dict[str, str]) -> None:
-        def terminar(resultado) -> None:
-            exportacion, avisos = resultado
-            self.linea.configure(text="Nombres guardados y archivos actualizados.")
-            self.refrescar()
-            self._avisar_copias(exportacion)
+        avisos: list[str] = []
+        if self.visor.carpeta != carpeta:
+            self.mostrar_error(merger.ErrorUnion("La reunión ya no está abierta."))
+            return
+        if self.visor.cambiar(lambda t: avisos.extend(merger.renombrar(t, cambios))):
+            self.linea.configure(text="Nombres guardados.")
             if avisos:
                 messagebox.showinfo(NOMBRE_APP, "\n".join(avisos), parent=self)
 
-        def fallar(e: BaseException) -> None:
-            self.refrescar()    # los nombres pueden haberse guardado
-            self.mostrar_error(e)
-
-        self.en_hilo(self.varios, lambda: exporter.renombrar(carpeta, cambios), terminar, fallar)
-
     def exportar(self) -> None:
-        r = self.seleccion()
-        if r is None:
-            return
+        self.visor.exportar(avisar=True)
 
-        def terminar(e: exporter.Exportacion) -> None:
-            self.linea.configure(text="Exportado: " + ", ".join(a.name for a in e.archivos))
-            self._avisar_copias(e)
-
-        self.en_hilo(
-            self.varios, lambda: exporter.exportar(merger.cargar(r.carpeta), r.carpeta), terminar)
-
-    def _avisar_copias(self, e: exporter.Exportacion) -> None:
+    def avisar_copias(self, e: exporter.Exportacion) -> None:
         if e.copias:
             messagebox.showinfo(
                 NOMBRE_APP, "Habías editado estos archivos; tu versión se conserva en:\n"
@@ -957,6 +886,7 @@ class Aplicacion(ctk.CTk):
 
     def abrir_ajustes(self) -> None:
         self.boton_ajustes.configure(state="disabled")
+        self.visor.parar()
 
         def consultar():
             # En el hilo de audio: no puede coincidir con una grabación.
@@ -1029,6 +959,8 @@ class Aplicacion(ctk.CTk):
             parent=self):
             return
         self._cerrando = True
+        self.visor.parar()
+        self.visor.exportar_pendiente()
         self.cancelar_proceso()
         # La grabación puede haber terminado mientras se respondía.
         if self.estado == GRABANDO:
@@ -1042,7 +974,7 @@ class Aplicacion(ctk.CTk):
             return
         if self.atajo is not None:
             self.atajo.detener()
-        for e in (self.audio, self.trabajo, self.varios):
+        for e in (self.audio, self.trabajo, self.archivos):
             e.shutdown(wait=True)       # deja terminar una exportación a medias
         self.after_cancel(self._tarea)
         self.after_cancel(self._tarea_limpieza)

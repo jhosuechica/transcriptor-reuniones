@@ -61,6 +61,8 @@ class Transcripcion:
     hablantes: dict[str, str]           # identificador -> nombre visible
     intervenciones: list[Intervencion]
     avisos: list[str] = field(default_factory=list)
+    # Alguien corrigió el texto o los hablantes a mano.
+    corregida: bool = False
 
 
 # --------------------------------------------------------------------------
@@ -256,18 +258,22 @@ def unir(
 # --------------------------------------------------------------------------
 
 
+def _nombre_valido(nombre: str) -> str:
+    nombre = re.sub(r"\s+", " ", nombre).strip()
+    if not nombre or not nombre.isprintable():
+        raise ErrorUnion("El nombre está vacío o no es válido.")
+    if len(nombre) > LARGO_NOMBRE:
+        raise ErrorUnion(f"El nombre supera los {LARGO_NOMBRE} caracteres: {nombre}")
+    return nombre
+
+
 def renombrar(t: Transcripcion, cambios: dict[str, str]) -> list[str]:
     """Cambia los nombres visibles (identificador -> nombre). Devuelve avisos."""
     nuevos = dict(t.hablantes)
     for ident, nombre in cambios.items():
         if ident not in nuevos:
             raise ErrorUnion(f"No existe el hablante {ident}.")
-        nombre = re.sub(r"\s+", " ", nombre).strip()
-        if not nombre or not nombre.isprintable():
-            raise ErrorUnion(f"El nombre para {t.hablantes[ident]} está vacío o no es válido.")
-        if len(nombre) > LARGO_NOMBRE:
-            raise ErrorUnion(f"El nombre supera los {LARGO_NOMBRE} caracteres: {nombre}")
-        nuevos[ident] = nombre
+        nuevos[ident] = _nombre_valido(nombre)
     t.hablantes = nuevos
     # Se permite: sirve cuando la diarización partió a una persona en dos.
     nombres = list(nuevos.values())
@@ -330,6 +336,55 @@ def heredar_nombres(nueva: Transcripcion, anterior: Transcripcion) -> list[str]:
             + ", ".join(perdidos) + ". Vuelve a ponerlos."]
 
 
+# --------------------------------------------------------------------------
+# Correcciones a mano
+# --------------------------------------------------------------------------
+
+
+def frases(t: Transcripcion) -> list[tuple[str, Frase]]:
+    """Todas las frases en orden, con su hablante."""
+    return [(i.hablante, f) for i in t.intervenciones for f in i.frases]
+
+
+def agregar_hablante(t: Transcripcion, nombre: str) -> str:
+    usados = [int(i[1:]) for i in t.hablantes if re.fullmatch(r"h\d+", i)]
+    ident = f"h{max(usados, default=0) + 1}"
+    t.hablantes[ident] = _nombre_valido(nombre)
+    return ident
+
+
+def corregir(
+    t: Transcripcion, n: int, texto: str | None = None, hablante: str | None = None,
+    toda: bool = False,
+) -> None:
+    """Cambia el texto o el hablante de la frase n, o el de toda su intervención."""
+    lista = frases(t)
+    quien, frase = lista[n]
+    if texto is not None:
+        limpio = re.sub(r"\s+", " ", texto).strip()
+        if not limpio:
+            raise ErrorUnion("El texto está vacío. Para quitar la frase, usa Borrar.")
+        frase.texto = limpio
+    if hablante is not None and hablante not in t.hablantes:
+        raise ErrorUnion(f"No existe el hablante {hablante}.")
+    if hablante is not None and hablante != quien:
+        grupo = [frase]
+        if toda:
+            grupo = next(i.frases for i in t.intervenciones
+                         if any(f is frase for f in i.frases))
+        ids = {id(f) for f in grupo}
+        lista = [(hablante if id(f) in ids else h, f) for h, f in lista]
+    t.intervenciones = juntar(lista)
+    t.corregida = True
+
+
+def borrar(t: Transcripcion, n: int) -> None:
+    lista = frases(t)
+    del lista[n]
+    t.intervenciones = juntar(lista)
+    t.corregida = True
+
+
 def hms(segundos: float) -> str:
     s = int(segundos)
     return f"{s // 3600:02}:{s % 3600 // 60:02}:{s % 60:02}"
@@ -361,7 +416,7 @@ def cargar(carpeta: Path) -> Transcripcion:
             d["titulo"], d["inicio"], d["hablantes"],
             [Intervencion(i["hablante"], i["inicio"], i["fin"], [Frase(**f) for f in i["frases"]])
              for i in d["intervenciones"]],
-            d["avisos"],
+            d["avisos"], bool(d.get("corregida", False)),
         )
     except FileNotFoundError:
         raise ErrorUnion(f"No existe {ruta}. Procesa antes la reunión.") from None

@@ -2,7 +2,7 @@
 
 - **Estado:** Aceptada
 - **Fecha:** 2026-11-24
-- **Aplica a:** `merger.py`, `exporter.py`
+- **Aplica a:** `merger.py`, `exporter.py`, `visor.py`
 
 ## Contexto
 
@@ -16,6 +16,9 @@ cambian por nombres reales, en tres formatos distintos. Alguien puede decir
 Guardar la transcripción en `transcripcion.json`, donde cada intervención lleva
 un identificador interno (`yo`, `h1`, `h2`) y una tabla lo traduce al nombre
 visible. Renombrar cambia esa tabla y vuelve a generar los archivos.
+
+Las correcciones hechas en la ventana se escriben en ese mismo documento, que
+queda marcado como corregido; volver a procesar la reunión guarda antes una copia.
 
 Antes de reemplazar un archivo se compara su huella SHA-256 con la de la última
 exportación. Si no coinciden, se guarda una copia de la versión editada.
@@ -36,5 +39,5 @@ generarse y añadir otro formato es añadir una función.
 **Negativas:** lo corregido a mano en Word no vuelve al documento, solo se
 conserva en la copia. Abrir y guardar sin cambios también genera una.
 
-**A vigilar:** si se añade la edición dentro de la aplicación, las correcciones
-deben escribirse en este documento y no en los archivos exportados.
+**A vigilar:** si se vuelve habitual repetir reuniones ya corregidas, habría que
+trasladar las correcciones al documento nuevo en lugar de guardar una copia.
