@@ -15,6 +15,7 @@ carpeta, se usa la última grabación.
 | `cli.py verificar` | Analiza una grabación: niveles, duración y saturación |
 | `cli.py procesar` | Transcribe, separa voces, une y exporta |
 | `cli.py procesar --hablantes 3` | Igual, indicando las personas |
+| `cli.py procesar --idioma es` | Transcribe de nuevo en un solo idioma |
 | `cli.py renombrar` | Pregunta los nombres; con `h1=Ana` cambia uno directamente |
 | `cli.py exportar` | Vuelve a crear los tres archivos |
 
@@ -32,6 +33,7 @@ crea la primera vez que se abre la aplicación:
 | `microfono`, `salida` | vacío | Parte del nombre del dispositivo |
 | `modelo` | `auto` | Modelo de transcripción |
 | `dispositivo` | `auto` | `auto`, `gpu` o `cpu` |
+| `idioma` | `auto` | `auto` (español e inglés), `es` o `en` |
 | `vocabulario` | vacío | Nombres y términos frecuentes, separados por comas |
 | `atajo` | `ctrl+alt+r` | Letra, número o F1 a F24, con ctrl o alt |
 | `indicador_flotante` | `true` | Indicador rojo al grabar |

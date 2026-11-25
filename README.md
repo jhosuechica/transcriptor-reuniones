@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 Aplicación de escritorio para Windows que graba reuniones de Teams, Zoom, Meet o
-cualquier otro programa, las transcribe en español y distingue quién habla. El
+cualquier otro programa, las transcribe en español e inglés y distingue quién habla. El
 resultado se exporta a `.txt`, `.docx` y `.srt`.
 
 **Todo ocurre en el equipo.** Ningún bot entra en la llamada y el audio no sale
@@ -269,7 +269,7 @@ sistema ────► sistema.wav ──► transcripción + separación de vo
    por los altavoces. Un reloj común coloca cada bloque en su instante: se
    rellenan los huecos y se corrige la deriva entre dispositivos.
 2. **Transcripción.** faster-whisper procesa cada pista en un proceso aparte,
-   con el español fijado y marcas de tiempo por palabra.
+   decidiendo el idioma de cada tramo y con marcas de tiempo por palabra.
 3. **Separación de voces.** pyannote analiza solo la pista del sistema, en CPU y
    con su telemetría desactivada.
 4. **Unión.** Cada palabra recibe un hablante, se agrupan en frases y se ordenan
@@ -284,18 +284,18 @@ Equipo: Ryzen 7 5700X, 32 GB de RAM y RX 7600 XT de 16 GB, con Windows 11.
 
 | Medida | Resultado |
 |---|---|
-| `large-v3` en GPU (`int8_float16`, lotes de 8) | 1084 s de audio en 191,7 s: 5,7 veces el tiempo real |
-| `small` en CPU (`int8`) | 3,6 veces el tiempo real |
+| `large-v3` en GPU, español e inglés | 1084 s de audio en 199 s: 5,4 veces el tiempo real |
+| `large-v3` en GPU, solo español | 1084 s de audio en 149 s: 7,3 veces el tiempo real |
+| `small` en CPU, ambos idiomas o solo español | 2,5 y 3,4 veces el tiempo real |
+| Palabras correctas alternando idiomas | 118 de 120 con `large-v3`; 114 de 120 con `small` |
 | Separación de voces en CPU | 1084 s de audio en 154 s: 7 veces el tiempo real |
 | Palabras bien atribuidas | 136 de 144 (94,4 %) |
 
-Los audios de prueba son **voces sintéticas y limpias**. La atribución se midió
-en un diálogo de 54 segundos con tres voces, sin indicar cuántas había,
-comparando el hablante de cada palabra con el guion. Una reunión real, con ruido
-y personas que se pisan, dará peores resultados.
+Los audios son **voces sintéticas y limpias**, comparadas con su guion, y el modelo
+ya estaba cargado. La atribución se midió con tres voces durante 54 segundos, sin
+indicar cuántas había. Una reunión real dará peores resultados.
 
-Durante la separación de voces y durante el proceso completo del ejecutable se
-vigilaron las conexiones de red y no se detectó ninguna.
+Se vigiló la red durante el proceso completo y no se detectó ninguna conexión.
 
 ---
 
@@ -305,7 +305,7 @@ vigilaron las conexiones de red y no se detectó ninguna.
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Son 191 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
+Son 204 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
 pistas, los reintentos, la asignación de hablantes, los archivos exportados, el
 reproductor y la ventana, que se abre de verdad con el audio simulado. Durante
 unos segundos aparecen ventanas en pantalla.
@@ -354,6 +354,7 @@ La calidad de la transcripción no se prueba de forma automática.
 - [ADR-0003 · Usar int8_float16 en la GPU](docs/adr/0003-int8-float16-en-gpu.md)
 - [ADR-0004 · Generar los archivos desde un documento único](docs/adr/0004-documento-unico.md)
 - [ADR-0005 · Recoger la memoria solo en el hilo de la ventana](docs/adr/0005-recoleccion-de-memoria.md)
+- [ADR-0006 · Decidir el idioma tramo a tramo](docs/adr/0006-idioma-por-tramos.md)
 
 El primero es el que define el proyecto: separar las pistas resuelve sin modelos
 la mitad del problema de saber quién habla, a cambio de tener que sincronizar
@@ -373,24 +374,23 @@ la GPU devolvía texto corrupto y el proceso terminaba con normalidad.
   una persona quedó asignado a otra.
 - **Nadie puede compartir el micrófono.** Todo lo que entra por él se atribuye a
   quien graba.
-- **El español está fijado.** Las partes en otro idioma saldrán mal.
+- **Solo español e inglés.** Las partes en otro idioma salen mal. Un cambio de
+  idioma sin pausa, o una palabra suelta, puede quedar en el idioma equivocado.
 - **Se graba todo lo que suena en el equipo.** Incluye notificaciones y música;
   no se aísla una aplicación concreta.
-- **La GPU se aprovecha a medias.** No acelera la separación de voces, y en la
-  transcripción se usa un cálculo más lento por el fallo del ADR-0003.
+- **La GPU se aprovecha a medias:** no separa voces y usa un cálculo más lento
+  por el fallo del ADR-0003.
 - **Las correcciones no sobreviven a una nueva transcripción.** Se guarda una
   copia, pero no hay forma de aplicarlas al documento nuevo ni de restaurarla
   desde la ventana.
-- **No se puede escuchar mientras se graba.** Lo que sonara quedaría en la
-  grabación.
+- **No se puede escuchar mientras se graba:** quedaría en la grabación.
 - **Los subtítulos largos tienen tiempos aproximados.** Al dividir una frase, el
   tiempo se reparte según la longitud del texto.
 - **El audio ocupa unos 0,7 GB por hora.** No se comprime ni se borra solo; si el
   disco está casi lleno, la grabación se detiene y se guarda.
 - **No hay integración continua ni ejecutable publicado.** Las pruebas se
   ejecutan en local y el `.exe` hay que construirlo.
-- **La licencia MIT cubre solo este código.** Los modelos y las librerías no se
-  redistribuyen y tienen las suyas.
+- **La licencia MIT cubre solo este código,** no los modelos ni las librerías.
 
 ---
 

@@ -23,7 +23,7 @@ GPU = t.Intento("cuda", "large-v3", "float16")
 CPU = t.Intento("cpu", "small", "int8")
 
 
-def _ok(con, rutas, intento, _v):
+def _ok(con, rutas, intento, _v, _i):
     con.send(("progreso", 1.0))
     for r in rutas:
         con.send(("resultado", t.Resultado(Path(r).name, 1.0, intento.modelo,
@@ -43,10 +43,10 @@ def _colgado(*_):
     time.sleep(60)
 
 
-def _gpu_muere_cpu_ok(con, rutas, intento, v):
+def _gpu_muere_cpu_ok(con, rutas, intento, v, i):
     if intento.dispositivo == "cuda":
         os._exit(7)
-    _ok(con, rutas, intento, v)
+    _ok(con, rutas, intento, v, i)
 
 
 def _mal_wav(con, *_):
@@ -122,6 +122,129 @@ class TestTextoCorrupto(unittest.TestCase):
         self.assertEqual(self.transcribir([], voz=1.0), [])
 
 
+class TestIdiomas(unittest.TestCase):
+    @staticmethod
+    def p(es):
+        return {"es": es, "en": 1 - es}
+
+    def test_decide_cada_tramo(self):
+        tramos = [(0, 3), (3.5, 6), (6.5, 9)]
+        self.assertEqual(
+            t.decidir_idiomas(tramos, [self.p(.99), self.p(.02), self.p(.9)]), ["es", "en", "es"])
+
+    def test_dudosos_y_no_analizados_siguen_al_vecino_mas_proximo(self):
+        tramos = [(0, 3), (3.2, 5), (5.9, 6.3), (6.5, 9), (9.4, 9.8)]
+        probs = [self.p(.99), self.p(.45), None, self.p(.01), None]
+        self.assertEqual(t.decidir_idiomas(tramos, probs), ["es", "es", "en", "en", "en"])
+
+    def test_si_ninguno_es_claro_gana_el_mas_probable(self):
+        self.assertEqual(
+            t.decidir_idiomas([(0, 3), (4, 6)], [self.p(.6), self.p(.4)]), ["es", "en"])
+        self.assertEqual(
+            t.decidir_idiomas([(0, 3), (3.1, 3.4)], [self.p(.6), None]), ["es", "es"])
+        self.assertEqual(t.decidir_idiomas([], []), [])
+
+    def detectar(self, valores, segundos=3.0):
+        vistos = []
+        modelo = SimpleNamespace(
+            feature_extractor=lambda x: np.zeros((128, int(len(x) / 160)), np.float32),
+            encode=lambda r: vistos.append(r.shape),
+            model=SimpleNamespace(detect_language=lambda _: [[(f"<|{k}|>", v) for k, v in valores]]))
+        return t._probabilidades(modelo, np.zeros(int(segundos * 16000)), ("es", "en")), vistos
+
+    def test_solo_cuentan_los_idiomas_esperados(self):
+        p, vistos = self.detectar([("pt", .6), ("es", .3), ("en", .1)])
+        self.assertEqual({k: round(v, 3) for k, v in p.items()}, {"es": .75, "en": .25})
+        self.assertEqual(vistos, [(128, 1000)])
+        self.assertEqual(self.detectar([("es", 1.0), ("en", 0.0)], 13)[1], [(128, 1400)])
+        self.assertEqual(self.detectar([("es", 1.0), ("en", 0.0)], 40)[1], [(128, 3000)])
+
+    def test_valores_imposibles_pasan_al_siguiente_intento(self):
+        for malos in ([("es", -1.7e38), ("en", 0.0)], [("es", float("nan")), ("en", 1.0)],
+                      [("es", 0.0), ("en", 0.0)], [("es", 5.0), ("en", 0.0)]):
+            with self.assertRaises(t.TextoCorrupto):
+                self.detectar(malos)
+
+    def test_no_se_analizan_los_trozos_cortos(self):
+        f = 16000
+        voz = [{"start": 0, "end": 3 * f}, {"start": 3 * f + 800, "end": 4 * f}]
+        with (mock.patch("faster_whisper.vad.get_speech_timestamps", side_effect=[voz, voz[1:], []]),
+              mock.patch.object(t, "_probabilidades", return_value=self.p(.1)) as p):
+            audio = np.zeros(5 * f)
+            self.assertEqual(t._separar_idiomas(None, audio, ("es", "en"), lambda _: None),
+                             [(0.0, 4.0, "en")])
+            self.assertEqual(p.call_count, 1)
+            # Si solo hay trozos cortos, se analizan.
+            self.assertEqual(
+                t._separar_idiomas(None, audio, ("es", "en"), lambda _: None)[0][2], "en")
+            self.assertEqual(t._separar_idiomas(None, audio, ("es", "en"), lambda _: None), [])
+
+    def test_junta_sin_pasar_de_30_segundos(self):
+        tramos = [(0, 10), (10.5, 20), (20.5, 29), (29.5, 35), (40, 41), (41.5, 43)]
+        self.assertEqual(
+            t.juntar_tramos(tramos, ["es", "es", "es", "es", "es", "en"]),
+            [(0, 20, "es"), (20.5, 35, "es"), (40, 41, "es"), (41.5, 43, "en")])
+
+    def transcribir(self, lote, tramos, idioma="auto", dispositivo="cuda", texto="Texto."):
+        llamadas, avances = [], []
+
+        class Modelo:
+            model = SimpleNamespace(device=dispositivo)
+
+            def transcribe(self, _audio, **k):
+                llamadas.append(k)
+                clips = k.get("clip_timestamps")
+                if clips and not isinstance(clips[0], dict):
+                    clips = [{"start": a, "end": b} for a, b in zip(clips[::2], clips[1::2])]
+                segs = [SimpleNamespace(text=texto and f"{k['language']} {texto}", start=c["start"],
+                                        end=c["end"], words=[]) for c in clips or [{"start": 0, "end": 30}]]
+                return iter(segs), SimpleNamespace(duration=100.0, duration_after_vad=0.0)
+
+        modelo = Modelo()
+        with (mock.patch.object(t, "_separar_idiomas", return_value=tramos) as separar,
+              mock.patch("faster_whisper.BatchedInferencePipeline",
+                         lambda m: SimpleNamespace(transcribe=m.transcribe, model=m))):
+            r = t._transcribir_audio(modelo, None, "", lote, avances.append, idioma)
+        return r, llamadas, avances, separar
+
+    TRAMOS = [(0.0, 20.0, "es"), (21.0, 60.0, "en"), (61.0, 99.0, "es")]
+
+    def test_transcribe_cada_idioma_y_ordena(self):
+        for lote in (8, 1):
+            r, llamadas, avances, _ = self.transcribir(lote, self.TRAMOS)
+            self.assertEqual([s.texto for s in r], ["es Texto.", "en Texto.", "es Texto."])
+            self.assertEqual([k["language"] for k in llamadas], ["es", "en"])
+            self.assertNotIn("vad_filter", llamadas[0])
+            self.assertEqual(avances, sorted(avances))
+            self.assertTrue(all(0.3 <= a <= 1.0 for a in avances), avances)
+        self.assertEqual(llamadas[0]["clip_timestamps"], [0.0, 20.0, 61.0, 99.0])
+
+    def test_un_solo_idioma_no_detecta_nada(self):
+        for idioma in ("es", "en"):
+            r, llamadas, _, separar = self.transcribir(8, self.TRAMOS, idioma)
+            separar.assert_not_called()
+            self.assertEqual([k["language"] for k in llamadas], [idioma])
+            self.assertTrue(llamadas[0]["vad_filter"])
+
+    def test_sin_voz(self):
+        r, llamadas, _, _ = self.transcribir(8, [])
+        self.assertEqual((r, llamadas), ([], []))
+
+    def test_vacio_con_voz_tambien_es_sospechoso(self):
+        with self.assertRaises(t.TextoCorrupto):
+            self.transcribir(8, [(0.0, 20.0, "en")], texto="")
+
+    def test_idioma_desconocido(self):
+        with tempfile.TemporaryDirectory() as d:
+            wav = Path(d) / "a.wav"
+            wav.write_bytes(b"")
+            with self.assertRaisesRegex(t.ErrorTranscripcion, "auto, es, en"):
+                t.transcribir([wav], Config(idioma="fr"))
+
+    def test_por_defecto_se_aceptan_los_dos(self):
+        self.assertEqual(t.IDIOMAS[Config().idioma], ("es", "en"))
+
+
 class TestProceso(unittest.TestCase):
     def test_normal(self):
         self.assertEqual(ejecutar(_ok)[0].archivo, "a.wav")
@@ -154,7 +277,7 @@ class TestProceso(unittest.TestCase):
     def test_respaldo_en_cpu(self):
         real, estados = t._ejecutar, []
 
-        def con_falso(*a):
+        def con_falso(*a, **k):
             return real(*a, trabajador=_gpu_muere_cpu_ok)
 
         with tempfile.TemporaryDirectory() as d, \

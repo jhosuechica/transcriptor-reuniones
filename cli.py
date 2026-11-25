@@ -203,6 +203,7 @@ def cmd_transcribir(cfg: config.Config, args) -> int:
     rutas = [ruta / "mic.wav", ruta / "sistema.wav"] if ruta.is_dir() else [ruta]
     cfg.modelo = args.modelo or cfg.modelo
     cfg.dispositivo = args.dispositivo or cfg.dispositivo
+    cfg.idioma = args.idioma or cfg.idioma
     inicio = time.perf_counter()
     resultados = transcriber.transcribir(
         rutas, cfg,
@@ -237,8 +238,10 @@ def cmd_procesar(cfg: config.Config, args) -> int:
     carpeta = Path(args.carpeta) if args.carpeta else _ultima_carpeta(cfg)
     inicio = time.perf_counter()
     cfg.modelo = args.modelo or cfg.modelo
+    cfg.idioma = args.idioma or cfg.idioma
     p = flujo.procesar(
-        carpeta, cfg, args.hablantes, bool(args.modelo) or args.retranscribir, _estado, _progreso,
+        carpeta, cfg, args.hablantes, bool(args.modelo or args.idioma) or args.retranscribir,
+        _estado, _progreso,
     )
     t = p.transcripcion
     print(f"\n\n{merger.a_texto(t)}\n")
@@ -332,12 +335,14 @@ def main() -> int:
     p = sub.add_parser("transcribir", help="transcribe una reunión o un WAV")
     p.add_argument("ruta", nargs="?", help="carpeta o WAV; por defecto, la última grabación")
     p.add_argument("--modelo", choices=("auto", *transcriber.MODELOS))
+    p.add_argument("--idioma", choices=transcriber.IDIOMAS, help="auto: español e inglés")
     p.add_argument("--dispositivo", choices=("auto", "gpu", "cpu"))
     p.set_defaults(func=cmd_transcribir)
     p = sub.add_parser("procesar", help="transcribe, separa hablantes y une las pistas")
     p.add_argument("carpeta", nargs="?", help="por defecto, la última grabación")
     p.add_argument("--hablantes", type=int, help="personas en la pista del sistema, sin contarte")
     p.add_argument("--modelo", choices=("auto", *transcriber.MODELOS))
+    p.add_argument("--idioma", choices=transcriber.IDIOMAS, help="auto: español e inglés")
     p.add_argument("--retranscribir", action="store_true")
     p.set_defaults(func=cmd_procesar)
     p = sub.add_parser("renombrar", help="pone nombre a los hablantes")

@@ -44,6 +44,8 @@ class Config:
     modelo: str = "auto"
     # Dónde transcribir: auto, gpu o cpu.
     dispositivo: str = "auto"
+    # Idioma de las reuniones: auto (español e inglés), es o en.
+    idioma: str = "auto"
     # Términos técnicos y nombres que suelen aparecer, separados por comas.
     vocabulario: str = ""
     # Atajo global para grabar y detener.

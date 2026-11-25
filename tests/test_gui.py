@@ -439,7 +439,10 @@ class TestVentana(unittest.TestCase):
         d.nombre.delete(0, "end")
         d.nombre.insert(0, "Nora")
         d.salida.set("Altavoz")
+        self.assertEqual(d.idioma.get(), "Español e inglés")
+        d.idioma.set("Solo español")
         d.aceptar()
+        self.assertEqual(self.app.cfg.idioma, "es")
         c = config.cargar(self.raiz / "config.json")
         self.assertEqual((c.nombre_usuario, c.salida, c.microfono, c.atajo),
                          ("Nora", "Altavoz", "Micrófono (Realtek", "ctrl+alt+shift+f22"))

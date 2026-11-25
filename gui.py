@@ -70,6 +70,7 @@ PREDETERMINADO = "Predeterminado de Windows"
 AUTOMATICO = "Automático"
 
 PARADO, INICIANDO, GRABANDO, DETENIENDO = "parado", "iniciando", "grabando", "deteniendo"
+IDIOMAS = {"Español e inglés": "auto", "Solo español": "es", "Solo inglés": "en"}
 DISPOSITIVOS_CALCULO = {"Automático": "auto", "Solo GPU": "gpu", "Solo CPU": "cpu"}
 
 
@@ -204,7 +205,7 @@ class DialogoNombres(Dialogo):
 
 class DialogoAjustes(Dialogo):
     def __init__(self, app: "Aplicacion", micros: list[str], salidas: list[str]):
-        super().__init__(app, "Ajustes", 560, 560)
+        super().__init__(app, "Ajustes", 560, 620)
         cfg = app.cfg
         zona = ctk.CTkFrame(self, fg_color="transparent")
         zona.pack(padx=18, pady=(14, 0), fill="both", expand=True)
@@ -231,6 +232,8 @@ class DialogoAjustes(Dialogo):
         self.salida = lista("Salida por la que suena la reunión", *self._opciones(salidas, cfg.salida))
         actual = next((k for k, v in DISPOSITIVOS_CALCULO.items() if v == cfg.dispositivo), AUTOMATICO)
         self.dispositivo = lista("Dónde transcribir", list(DISPOSITIVOS_CALCULO), actual)
+        actual = next((k for k, v in IDIOMAS.items() if v == cfg.idioma), next(iter(IDIOMAS)))
+        self.idioma = lista("Idioma de las reuniones", list(IDIOMAS), actual)
         self.vocabulario = entrada("Nombres y términos frecuentes, separados por comas", cfg.vocabulario)
         self.atajo = entrada("Atajo para grabar y detener", cfg.atajo)
         self.flotante = ctk.CTkCheckBox(zona, text="Mostrar el indicador flotante al grabar")
@@ -268,6 +271,7 @@ class DialogoAjustes(Dialogo):
             microfono=valor(self.micro, self._micro_inicial, self.app.cfg.microfono),
             salida=valor(self.salida, self._salida_inicial, self.app.cfg.salida),
             dispositivo=DISPOSITIVOS_CALCULO[self.dispositivo.get()],
+            idioma=IDIOMAS[self.idioma.get()],
             vocabulario=self.vocabulario.get().strip(),
             atajo=self.atajo.get().strip().lower(),
             indicador_flotante=bool(self.flotante.get()),
