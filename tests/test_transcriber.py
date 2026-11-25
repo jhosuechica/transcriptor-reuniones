@@ -122,6 +122,37 @@ class TestTextoCorrupto(unittest.TestCase):
         self.assertEqual(self.transcribir([], voz=1.0), [])
 
 
+class TestEjemplo(unittest.TestCase):
+    def test_reconoce_el_eco(self):
+        self.assertTrue(t.es_ejemplo("¿Hay dudas? No, ninguna.", "es"))
+        self.assertTrue(t.es_ejemplo("bien empezamos primero los acuerdos", "es"))
+        self.assertTrue(t.es_ejemplo("Any doubts? No, none.", "en"))
+        self.assertTrue(t.es_ejemplo(t.EJEMPLOS["es"], "es"))
+
+    def test_no_quita_lo_que_se_dijo(self):
+        for texto in ("¿Hay dudas?", "No, ninguna.", "Bien, empezamos.", "Bien", "", "...",
+                      "¿Hay dudas? No, gracias.", "Bien, empezamos. Primero, las tareas."):
+            self.assertFalse(t.es_ejemplo(texto, "es"), texto)
+        self.assertFalse(t.es_ejemplo("¿Hay dudas? No, ninguna.", "en"))
+
+    def test_se_da_en_el_idioma_de_cada_tramo_y_se_filtra(self):
+        vistos = []
+
+        class Modelo:
+            model = SimpleNamespace(device="cpu")
+
+            def transcribe(self, _a, **k):
+                vistos.append(k["hotwords"])
+                textos = ["Any doubts? No, none.", "Real text."]
+                segs = (SimpleNamespace(text=x, start=n, end=n + 1, words=[])
+                        for n, x in enumerate(textos))
+                return segs, SimpleNamespace(duration=9.0, duration_after_vad=9.0)
+
+        r = t._transcribir_audio(Modelo(), None, "Kubernetes, Ana", 1, lambda _: None, "en")
+        self.assertEqual([s.texto for s in r], ["Real text."])
+        self.assertEqual(vistos, [t.EJEMPLOS["en"] + " Kubernetes, Ana"])
+
+
 class TestIdiomas(unittest.TestCase):
     @staticmethod
     def p(es):
@@ -168,12 +199,15 @@ class TestIdiomas(unittest.TestCase):
     def test_no_se_analizan_los_trozos_cortos(self):
         f = 16000
         voz = [{"start": 0, "end": 3 * f}, {"start": 3 * f + 800, "end": 4 * f}]
-        with (mock.patch("faster_whisper.vad.get_speech_timestamps", side_effect=[voz, voz[1:], []]),
+        with (mock.patch("faster_whisper.vad.get_speech_timestamps",
+                         side_effect=[voz, voz[1:], []]) as cortar,
               mock.patch.object(t, "_probabilidades", return_value=self.p(.1)) as p):
             audio = np.zeros(5 * f)
             self.assertEqual(t._separar_idiomas(None, audio, ("es", "en"), lambda _: None),
                              [(0.0, 4.0, "en")])
             self.assertEqual(p.call_count, 1)
+            opciones = cortar.call_args.args[1]
+            self.assertEqual((opciones.speech_pad_ms, opciones.min_silence_duration_ms), (300, 250))
             # Si solo hay trozos cortos, se analizan.
             self.assertEqual(
                 t._separar_idiomas(None, audio, ("es", "en"), lambda _: None)[0][2], "en")

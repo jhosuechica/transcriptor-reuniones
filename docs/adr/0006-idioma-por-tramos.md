@@ -17,6 +17,11 @@ español o el inglés, unir los seguidos del mismo idioma y transcribir cada gru
 con su idioma fijado. Los tramos de menos de un segundo, o dudosos, toman el del
 vecino más próximo. Se puede fijar un solo idioma en los ajustes.
 
+Los tramos se separan con 250 ms de silencio y conservan 300 ms de margen a cada
+lado. Con 100 ms, en una reunión real se recuperaba el 82,8 % de las palabras, por
+debajo del 84,6 % con el idioma fijado; con 300 ms, el 85,9 %. Con pausas de 400 ms
+se recuperaban más, pero la prueba que alterna idiomas bajaba a 91 de 120.
+
 La detección rellena cada tramo hasta 10 segundos en lugar de 30 y se hace de uno
 en uno. Por lotes, en una RX 7600 XT con ROCm 7.2, devolvía números sin sentido;
 los resultados imposibles se rechazan y pasan al siguiente intento.
@@ -33,7 +38,7 @@ los resultados imposibles se rechazan y pasan al siguiente intento.
 ## Consecuencias
 
 **Positivas:** en un diálogo sintético que alterna ambos idiomas se pasa del 56,7 %
-al 98,3 % de palabras correctas (118 de 120), sin cambios en el diálogo solo en
+al 98,3 % de palabras correctas (118 de 120) al adoptarlo, sin cambios en el diálogo solo en
 español (144 de 144).
 
 **Negativas:** la transcripción tarda más, una palabra suelta puede quedar en el

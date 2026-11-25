@@ -42,10 +42,20 @@ CALCULO_GPU = "int8_float16"
 # Con el idioma fijado, Whisper traduce lo que oye en otro. Con "auto" se decide
 # entre estos, tramo a tramo; probar con todos confunde el español con parecidos.
 IDIOMAS = {"auto": ("es", "en"), "es": ("es",), "en": ("en",)}
+# Whisper imita la puntuación de lo que se le da como contexto. Sin ejemplo, en una
+# reunión real la mitad del texto salía en rachas largas sin puntuar.
+EJEMPLOS = {
+    "es": "Bien, empezamos. Primero, los acuerdos. ¿Hay dudas? No, ninguna.",
+    "en": "Okay, let us begin. First, the agreements. Any doubts? No, none.",
+}
 TRAMO_MAX_S = 28.0          # Whisper procesa 30 s como mucho
 TRAMO_FIABLE_S = 1.0        # con menos voz, la detección no es fiable
 IDIOMA_CLARO = 0.75         # probabilidad para fiarse de un tramo
 RELLENO_S = 10.0            # con 30 s, como al transcribir, tarda el triple
+# Al cortar por las pausas. Con 100 ms de margen se perdían principios de frase;
+# con pausas más largas, dos idiomas caen en el mismo tramo.
+PAUSA_CORTE_MS = 250
+MARGEN_VOZ_MS = 300
 PAUSA_MAX_S = 2.0           # silencio máximo dentro de un tramo
 # Segundos de voz a partir de los que un resultado vacío de la GPU es sospechoso.
 VOZ_MINIMA_S = 5.0
@@ -205,6 +215,22 @@ def es_corrupto(texto: str) -> bool:
     return re.search(r"([^\w\s.…])\1{9,}|([^\W\d])\2{19,}", texto) is not None
 
 
+def es_ejemplo(texto: str, idioma: str) -> bool:
+    """Indica si el texto es un eco del ejemplo, que puede salir donde hay ruido.
+
+    Debe abarcar más de una de sus frases: una sola («¿Hay dudas?») podría ser de
+    verdad.
+    """
+    def palabras(s: str) -> str:
+        return f" {' '.join(re.findall(r'[^\W_]+', s.lower()))} "
+
+    dicho, ejemplo = palabras(texto), EJEMPLOS[idioma]
+    return (
+        len(dicho.split()) > 1 and dicho in palabras(ejemplo)
+        and not any(dicho in palabras(f) for f in re.split(r"(?<=[.?])\s", ejemplo))
+    )
+
+
 def decidir_idiomas(
     tramos: list[tuple[float, float]], probabilidades: list[dict[str, float] | None]
 ) -> list[str]:
@@ -268,7 +294,8 @@ def _separar_idiomas(modelo, audio: np.ndarray, idiomas, avisar) -> list[tuple[f
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
     voz = get_speech_timestamps(audio, VadOptions(
-        min_silence_duration_ms=250, speech_pad_ms=100, max_speech_duration_s=TRAMO_MAX_S))
+        min_silence_duration_ms=PAUSA_CORTE_MS, speech_pad_ms=MARGEN_VOZ_MS,
+        max_speech_duration_s=TRAMO_MAX_S))
     f = FRECUENCIA_WHISPER
     tramos = [(v["start"] / f, v["end"] / f) for v in voz]
     fiables = [fin - inicio >= TRAMO_FIABLE_S for inicio, fin in tramos]
@@ -332,8 +359,9 @@ def _transcribir_idioma(
         word_timestamps=True,
         # Evita que un error se repita en bucle en el resto de la reunión.
         condition_on_previous_text=False,
-        # Términos técnicos y nombres propios que suelen aparecer.
-        hotwords=vocabulario or None,
+        # Ejemplo de puntuación, y términos y nombres que suelen aparecer. Va lo
+        # primero porque, si no cabe todo, se recorta el final.
+        hotwords=f"{EJEMPLOS[idioma]} {vocabulario}".strip(),
         **extra,
     )
     lista = []
@@ -343,7 +371,7 @@ def _transcribir_idioma(
         texto = s.text.strip()
         if es_corrupto(texto):
             raise TextoCorrupto(f"texto sin sentido en el segundo {s.start:.0f}")
-        if texto:
+        if texto and not es_ejemplo(texto, idioma):
             lista.append(Segmento(
                 round(s.start, 3), round(s.end, 3), texto,
                 [Palabra(round(p.start, 3), round(p.end, 3), p.word, round(p.probability, 3))

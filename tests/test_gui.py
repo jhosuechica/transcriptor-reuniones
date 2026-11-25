@@ -348,12 +348,14 @@ class TestVentana(unittest.TestCase):
 
     def test_procesar_con_avance(self):
         visto = {}
+        seguir = threading.Event()
+        self.addCleanup(seguir.set)
 
         def falso(carpeta, cfg, personas, repetir, al_estado, al_progreso, cancelar):
             visto.update(carpeta=carpeta, personas=personas, repetir=repetir, modelo=cfg.modelo)
             al_estado("Transcribiendo")
             al_progreso(0.5)
-            time.sleep(0.4)
+            seguir.wait(10)
             t = merger.cargar(carpeta)
             return flujo.Procesado(t, exporter.exportar(t, carpeta), [], 1.0, False)
 
@@ -364,6 +366,7 @@ class TestVentana(unittest.TestCase):
         self.bombear(lambda: self.app.progreso.get() == 0.5)
         self.assertEqual(self.app.boton_nombres.cget("state"), "disabled")
         self.app.procesar(self.demo)        # no se lanza otra a la vez
+        seguir.set()
         self.bombear(lambda: self.app.procesando is None)
         self.assertEqual(visto, {"carpeta": self.demo, "personas": 3, "repetir": False,
                                  "modelo": "auto"})

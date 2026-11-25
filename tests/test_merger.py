@@ -82,6 +82,52 @@ class TestAsignar(unittest.TestCase):
                 self.assertEqual(h, max(total, key=total.get))
 
 
+class TestAjustarAFrases(unittest.TestCase):
+    def ajustar(self, texto, hablantes, pausas=()):
+        p, t = [], 0.0
+        for n, palabra in enumerate(texto.split()):
+            t += 2.0 if n in pausas else 0.0
+            p.append(Palabra(t, t + 0.25, " " + palabra, 0.9))
+            t += 0.3
+        return "".join(m.ajustar_a_frases(p, list(hablantes)))
+
+    def test_ultima_palabra_vuelve_a_su_frase(self):
+        self.assertEqual(self.ajustar("Te lo diré ya. Pierdes ochenta puntos.", "AAABBBB"), "AAAABBB")
+
+    def test_primera_palabra_pasa_a_la_frase_siguiente(self):
+        self.assertEqual(self.ajustar("Es mañana. Bueno, no importa nada.", "AAABBB"), "AABBBB")
+
+    def test_sin_final_cercano_no_se_mueve(self):
+        self.assertEqual(self.ajustar("uno dos tres cuatro cinco seis siete ocho", "AAAABBBB"), "AAAABBBB")
+        self.assertEqual(self.ajustar("a b c d. e f g h i j", "AAAAAAAABB"), "AAAAAAAABB")
+
+    def test_cambio_en_final_o_pausa_se_respeta(self):
+        self.assertEqual(self.ajustar("Uno dos. Tres cuatro.", "AABB"), "AABB")
+        self.assertEqual(self.ajustar("uno dos. tres cuatro cinco seis", "AAABBB", pausas=(3,)), "AAABBB")
+
+    def test_una_interjeccion_no_absorbe_la_frase_ajena(self):
+        # "sí" dicho por otra persona en mitad de una frase.
+        self.assertEqual(
+            self.ajustar("la base sí de datos lista. Bien.", "AABAAAA"), "AABAAAA")
+
+    def test_ningun_turno_desaparece(self):
+        self.assertEqual(self.ajustar("Vale. Claro, entonces seguimos mañana.", "ABCCC"), "ABCCC")
+
+    def test_no_pasa_de_tres_palabras(self):
+        self.assertEqual(self.ajustar("a b c d. e f g h i j", "AAAAAAABBB"), "AAAABBBBBB")
+        self.assertEqual(self.ajustar("a b c d. e f g h i j k l", "AAAAAAAABBBB"), "AAAAAAAABBBB")
+
+    def test_vacio_y_un_hablante(self):
+        self.assertEqual(m.ajustar_a_frases([], []), [])
+        self.assertEqual(self.ajustar("uno dos tres", "AAA"), "AAA")
+
+    def test_se_aplica_al_unir(self):
+        p = palabras("Te lo diré ya. Pierdes ochenta puntos.", 0)
+        t = unir(resultado(), resultado(p), [Turno(0, 1.2, "A"), Turno(1.2, 9, "B")])
+        self.assertEqual([i.texto for i in t.intervenciones],
+                         ["Te lo diré ya.", "Pierdes ochenta puntos."])
+
+
 class TestUnir(unittest.TestCase):
     def test_orden_y_formato(self):
         t = unir(resultado(palabras("Hola, buenos días.", 83)),

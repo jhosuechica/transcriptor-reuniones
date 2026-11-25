@@ -272,9 +272,8 @@ sistema ────► sistema.wav ──► transcripción + separación de vo
    decidiendo el idioma de cada tramo y con marcas de tiempo por palabra.
 3. **Separación de voces.** pyannote analiza solo la pista del sistema, en CPU y
    con su telemetría desactivada.
-4. **Unión.** Cada palabra recibe un hablante, se agrupan en frases y se ordenan
-   las dos pistas. Se descartan las frases del micrófono que repiten lo que dijo
-   otra persona.
+4. **Unión.** Cada palabra recibe un hablante y los cambios de persona se llevan al
+   final de frase más próximo. Se ordenan las dos pistas y se descarta el eco.
 
 ---
 
@@ -287,13 +286,15 @@ Equipo: Ryzen 7 5700X, 32 GB de RAM y RX 7600 XT de 16 GB, con Windows 11.
 | `large-v3` en GPU, español e inglés | 1084 s de audio en 199 s: 5,4 veces el tiempo real |
 | `large-v3` en GPU, solo español | 1084 s de audio en 149 s: 7,3 veces el tiempo real |
 | `small` en CPU, ambos idiomas o solo español | 2,5 y 3,4 veces el tiempo real |
-| Palabras correctas alternando idiomas | 118 de 120 con `large-v3`; 114 de 120 con `small` |
+| Palabras correctas alternando idiomas | 117 de 120 con `large-v3` |
 | Separación de voces en CPU | 1084 s de audio en 154 s: 7 veces el tiempo real |
-| Palabras bien atribuidas | 136 de 144 (94,4 %) |
+| Hablante correcto, diálogo sintético de 3 voces | 136 de 144 palabras (94,4 %) |
+| Hablante correcto, reunión real de 4 personas | 1777 de 1811 palabras (98,1 %) |
 
-Los audios son **voces sintéticas y limpias**, comparadas con su guion, y el modelo
-ya estaba cargado. La atribución se midió con tres voces durante 54 segundos, sin
-indicar cuántas había. Una reunión real dará peores resultados.
+Salvo la reunión real, son **voces sintéticas y limpias**, con el modelo ya cargado.
+La real es ES2004a del [corpus AMI](https://groups.inf.ed.ac.uk/ami/corpus/): 17
+minutos en inglés con micrófonos de diadema, sin indicar cuántas personas había. De
+ella se transcribe el 85,1 % de las palabras dichas sin solape ni muletillas.
 
 Se vigiló la red durante el proceso completo y no se detectó ninguna conexión.
 
@@ -305,7 +306,7 @@ Se vigiló la red durante el proceso completo y no se detectó ninguna conexión
 .\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
-Son 204 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
+Son 216 y no necesitan modelos, micrófono ni GPU. Cubren la alineación de las
 pistas, los reintentos, la asignación de hablantes, los archivos exportados, el
 reproductor y la ventana, que se abre de verdad con el audio simulado. Durante
 unos segundos aparecen ventanas en pantalla.
@@ -355,6 +356,7 @@ La calidad de la transcripción no se prueba de forma automática.
 - [ADR-0004 · Generar los archivos desde un documento único](docs/adr/0004-documento-unico.md)
 - [ADR-0005 · Recoger la memoria solo en el hilo de la ventana](docs/adr/0005-recoleccion-de-memoria.md)
 - [ADR-0006 · Decidir el idioma tramo a tramo](docs/adr/0006-idioma-por-tramos.md)
+- [ADR-0007 · Dar a Whisper un ejemplo de puntuación](docs/adr/0007-ejemplo-de-puntuacion.md)
 
 El primero es el que define el proyecto: separar las pistas resuelve sin modelos
 la mitad del problema de saber quién habla, a cambio de tener que sincronizar
@@ -367,11 +369,9 @@ la GPU devolvía texto corrupto y el proceso terminaba con normalidad.
 
 - **Solo funciona en Windows.** La captura usa WASAPI y el atajo, la API de
   Windows. Se ha probado únicamente en Windows 11 con Python 3.12.
-- **La separación de voces no se ha validado con reuniones reales.** Las cifras
-  proceden de voces sintéticas; con varias personas reales el acierto se
-  desconoce.
-- **Las intervenciones muy cortas se atribuyen mal.** En la prueba, el «Sí» de
-  una persona quedó asignado a otra.
+- **La separación de voces se ha medido con una sola reunión real,** en inglés y
+  bien grabada. Encontró 5 personas en lugar de 4; indicar el número lo corrige.
+- **Fallan las intervenciones de una o dos palabras** (11 de 21) y los solapes.
 - **Nadie puede compartir el micrófono.** Todo lo que entra por él se atribuye a
   quien graba.
 - **Solo español e inglés.** Las partes en otro idioma salen mal. Un cambio de

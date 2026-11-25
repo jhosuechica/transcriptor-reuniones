@@ -23,6 +23,8 @@ PAUSA_FRASE = 0.8           # s de silencio que cierran una frase
 PAUSA_INTERVENCION = 2.0    # s entre frases que separan intervenciones
 DURACION_MAX = 30.0         # s de una intervención antes de partirla
 DISTANCIA_MAX = 1.0         # s a los que una palabra se asigna al turno más cercano
+AJUSTE_PALABRAS = 3         # las que puede moverse un cambio de hablante
+AJUSTE_S = 1.2              # y el tiempo máximo
 MARGEN_ECO = 1.0            # s alrededor de una frase donde se busca su eco
 PALABRAS_MIN_ECO = 4
 PARECIDO_ECO = 0.8
@@ -129,6 +131,50 @@ def asignar_hablantes(palabras: list[Palabra], turnos: list[Turno]) -> list[str 
     return etiquetas
 
 
+def _fin_natural(palabras: list[Palabra], i: int) -> bool:
+    """Indica si entre la palabra i-1 y la i acaba una frase o hay una pausa."""
+    return (
+        palabras[i - 1].texto.rstrip().endswith(FIN_DE_FRASE)
+        or palabras[i].inicio - palabras[i - 1].fin > PAUSA_FRASE
+    )
+
+
+def ajustar_a_frases(palabras: list[Palabra], hablantes: list[str]) -> list[str]:
+    """Lleva los cambios de hablante al final de frase más próximo.
+
+    Los turnos se calculan solo con el sonido y suelen fallar por una o dos
+    palabras. Si hay un final de frase muy cerca, es mejor límite. Nunca se quita
+    un turno entero: podría ser una interjección de otra persona.
+    """
+    h = list(hablantes)
+    i = 1
+    while i < len(h):
+        if h[i] == h[i - 1] or _fin_natural(palabras, i):
+            i += 1
+            continue
+        # Turno que termina en i y turno que empieza en i.
+        inicio = i - 1
+        while inicio > 0 and h[inicio - 1] == h[i - 1]:
+            inicio -= 1
+        fin = i + 1
+        while fin < len(h) and h[fin] == h[i]:
+            fin += 1
+        candidatos = sorted(
+            (k for k in range(max(inicio + 1, i - AJUSTE_PALABRAS),
+                              min(fin - 1, i + AJUSTE_PALABRAS) + 1)
+             if k != i and _fin_natural(palabras, k)
+             and abs(palabras[k].inicio - palabras[i].inicio) <= AJUSTE_S
+             # El turno que recibe las palabras debe tener al menos tantas.
+             and abs(k - i) <= (fin - i if k < i else i - inicio)),
+            key=lambda k: abs(k - i),
+        )
+        if candidatos:
+            k = candidatos[0]
+            h[min(k, i):max(k, i)] = [h[i] if k < i else h[i - 1]] * abs(k - i)
+        i = max(i, candidatos[0] if candidatos else i) + 1
+    return h
+
+
 # --------------------------------------------------------------------------
 # Frases e intervenciones
 # --------------------------------------------------------------------------
@@ -227,7 +273,8 @@ def unir(
 ) -> Transcripcion:
     avisos: list[str] = []
     p_sis = _palabras(sistema)
-    h_sis = [h or "SPEAKER_00" for h in asignar_hablantes(p_sis, turnos)]
+    h_sis = ajustar_a_frases(
+        p_sis, [h or "SPEAKER_00" for h in asignar_hablantes(p_sis, turnos)])
     f_sis = agrupar_frases(p_sis, h_sis)
 
     p_mic = _palabras(mic)
