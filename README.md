@@ -35,7 +35,6 @@ resto de participantes.
 - [Rendimiento medido](#rendimiento-medido)
 - [Pruebas](#pruebas)
 - [Estructura del repositorio](#estructura-del-repositorio)
-- [Decisiones técnicas](#decisiones-técnicas)
 - [Limitaciones conocidas](#limitaciones-conocidas)
 - [Autor](#autor)
 
@@ -342,26 +341,8 @@ La calidad de la transcripción no se prueba de forma automática.
 └── docs/
     ├── CONSOLA-Y-CONFIGURACION.md Comandos y claves
     ├── GPU-Y-EJECUTABLE.md Pasos opcionales, fuera del README por extensión
-    ├── adr/                Decisiones de diseño
     └── img/                Capturas, con datos inventados
 ```
-
----
-
-## Decisiones técnicas
-
-- [ADR-0001 · Grabar dos pistas separadas](docs/adr/0001-dos-pistas-separadas.md)
-- [ADR-0002 · Ejecutar los modelos en un proceso aparte](docs/adr/0002-modelos-en-proceso-aparte.md)
-- [ADR-0003 · Usar int8_float16 en la GPU](docs/adr/0003-int8-float16-en-gpu.md)
-- [ADR-0004 · Generar los archivos desde un documento único](docs/adr/0004-documento-unico.md)
-- [ADR-0005 · Recoger la memoria solo en el hilo de la ventana](docs/adr/0005-recoleccion-de-memoria.md)
-- [ADR-0006 · Decidir el idioma tramo a tramo](docs/adr/0006-idioma-por-tramos.md)
-- [ADR-0007 · Dar a Whisper un ejemplo de puntuación](docs/adr/0007-ejemplo-de-puntuacion.md)
-
-El primero es el que define el proyecto: separar las pistas resuelve sin modelos
-la mitad del problema de saber quién habla, a cambio de tener que sincronizar
-dos relojes de audio distintos. El tercero explica un fallo que no daba error:
-la GPU devolvía texto corrupto y el proceso terminaba con normalidad.
 
 ---
 
@@ -379,7 +360,7 @@ la GPU devolvía texto corrupto y el proceso terminaba con normalidad.
 - **Se graba todo lo que suena en el equipo.** Incluye notificaciones y música;
   no se aísla una aplicación concreta.
 - **La GPU se aprovecha a medias:** no separa voces y usa un cálculo más lento
-  por el fallo del ADR-0003.
+  porque el rápido devolvía texto corrupto en la tarjeta probada.
 - **Las correcciones no sobreviven a una nueva transcripción.** Se guarda una
   copia, pero no hay forma de aplicarlas al documento nuevo ni de restaurarla
   desde la ventana.
